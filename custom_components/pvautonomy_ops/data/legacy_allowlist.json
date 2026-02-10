@@ -1,0 +1,10 @@
+{
+  "legacy_device_names": [
+    "sph10k_haus_03",
+    "mic600_garage_01"
+  ],
+  "updated_at": "2026-02-07",
+  "note": "Grandfathered localized device IDs (pre-Directive I18N-001). These are exempt from Gate I18N-1.",
+  "directive": "D-ADDON-I18N-001",
+  "schema_version": "1.0"
+}

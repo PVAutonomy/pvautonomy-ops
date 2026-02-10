@@ -1,0 +1,11 @@
+{
+  "domain": "pvautonomy_ops",
+  "name": "PVAutonomy Production Operations",
+  "version": "0.1.0",
+  "documentation": "https://github.com/PVAutonomy/pvautonomy-ops",
+  "issue_tracker": "https://github.com/PVAutonomy/pvautonomy-ops/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@gshubi"],
+  "iot_class": "local_polling"
+}
