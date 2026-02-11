@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PVAutonomy Ops Setup",
+        "description": "Configure the PVAutonomy Operations integration for managing edge devices.",
+        "data": {
+          "name": "Integration name",
+          "poll_interval_sec": "Poll interval (seconds)"
+        },
+        "data_description": {
+          "name": "Display name for this integration instance.",
+          "poll_interval_sec": "How often to refresh device status (10-300 seconds)."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "PVAutonomy Ops is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PVAutonomy Ops Options",
+        "description": "Configure firmware artifacts, flash guards, and update behavior.",
+        "data": {
+          "poll_interval_sec": "Poll interval (seconds)",
+          "artifact_channel": "Firmware channel",
+          "artifact_hw_family_default": "Default hardware family",
+          "artifact_owner": "GitHub artifact owner",
+          "artifact_repo": "GitHub artifact repository",
+          "flash_min_firmware_size_kb": "Minimum firmware size (KB)",
+          "gates_freshness_minutes": "Gates freshness timeout (minutes)",
+          "strict_gates_required": "Require gates to pass before flash"
+        },
+        "data_description": {
+          "poll_interval_sec": "How often to refresh device status (10-300 seconds).",
+          "artifact_channel": "Release channel: 'stable' for production, 'beta' for testing.",
+          "artifact_hw_family_default": "Default hardware family for firmware downloads.",
+          "artifact_owner": "GitHub organization or user owning the firmware repository.",
+          "artifact_repo": "GitHub repository name for firmware releases.",
+          "flash_min_firmware_size_kb": "Firmware files smaller than this are rejected (stub protection).",
+          "gates_freshness_minutes": "Maximum age of gate results before they expire (1-60 minutes).",
+          "strict_gates_required": "If enabled, flash is only allowed when gates pass and are fresh."
+        }
+      }
+    }
+  }
+}

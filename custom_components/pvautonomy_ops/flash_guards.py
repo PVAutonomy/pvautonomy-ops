@@ -10,10 +10,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.util import dt as dt_util
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
-# Guard configuration
-GATES_FRESHNESS_TIMEOUT = timedelta(minutes=10)  # G-2: Gates must be fresh
+# Guard configuration (default — overridden by Options Flow at runtime)
+DEFAULT_GATES_FRESHNESS_MINUTES = 10
 
 
 class FlashGuardError(Exception):
@@ -33,6 +35,10 @@ class FlashGuardError(Exception):
 async def check_flash_guards(hass: HomeAssistant) -> tuple[bool, str, str]:
     """Check all flash guard requirements (D-ADDON-FLASH-GUARD-001).
     
+    Reads gates_freshness_minutes and strict_gates_required from runtime
+    config (Options Flow).  Falls back to hardcoded defaults when config
+    is unavailable.
+    
     Args:
         hass: Home Assistant instance
         
@@ -45,6 +51,14 @@ async def check_flash_guards(hass: HomeAssistant) -> tuple[bool, str, str]:
     Raises:
         FlashGuardError: If critical guards fail
     """
+    # Read runtime config from Options Flow (P3-6-001)
+    runtime_config = hass.data.get(DOMAIN, {}).get("config", {})
+    freshness_minutes = runtime_config.get(
+        "gates_freshness_minutes", DEFAULT_GATES_FRESHNESS_MINUTES
+    )
+    strict_gates = runtime_config.get("strict_gates_required", True)
+    gates_freshness_timeout = timedelta(minutes=freshness_minutes)
+
     # Get status sensor
     status_entity_id = "sensor.pvautonomy_ops_status"
     status_state = hass.states.get(status_entity_id)
@@ -85,13 +99,13 @@ async def check_flash_guards(hass: HomeAssistant) -> tuple[bool, str, str]:
         now = dt_util.utcnow()
         age = now - last_run_utc
         
-        if age > GATES_FRESHNESS_TIMEOUT:
+        if age > gates_freshness_timeout:
             _LOGGER.warning(
                 "Flash blocked: gates too old (age=%s, limit=%s)",
                 age,
-                GATES_FRESHNESS_TIMEOUT
+                gates_freshness_timeout
             )
-            return False, "gates_stale", f"Gates expired ({int(age.total_seconds() / 60)}min old) - run gates again"
+            return False, "gates_stale", f"Gates expired ({int(age.total_seconds() / 60)}min old, limit {freshness_minutes}min) - run gates again"
     
     except Exception as e:
         _LOGGER.error("Flash blocked: error processing gates_last_run: %s", e, exc_info=True)
@@ -108,11 +122,17 @@ async def check_flash_guards(hass: HomeAssistant) -> tuple[bool, str, str]:
     
     if gates_overall == "warn":
         gates_warn = attrs.get("gates_warn", [])
-        _LOGGER.warning(
-            "Flash blocked: gates_overall=warn (warned gates: %s)",
-            ", ".join(gates_warn)
-        )
-        return False, "gates_warned", f"Gates WARNED: {', '.join(gates_warn)} - resolve warnings"
+        if strict_gates:
+            _LOGGER.warning(
+                "Flash blocked: gates_overall=warn, strict_gates=True (warned gates: %s)",
+                ", ".join(gates_warn)
+            )
+            return False, "gates_warned", f"Gates WARNED: {', '.join(gates_warn)} - resolve warnings (strict mode)"
+        else:
+            _LOGGER.warning(
+                "Flash allowed despite warnings (strict_gates=False): %s",
+                ", ".join(gates_warn)
+            )
     
     if gates_overall != "pass":
         _LOGGER.warning("Flash blocked: gates_overall=%s (expected 'pass')", gates_overall)

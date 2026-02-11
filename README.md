@@ -37,17 +37,64 @@ Home Assistant integration for fleet management of PVAutonomy edge devices (ESP3
 
 ## Configuration
 
-The integration is configured via the Home Assistant UI (config flow). No YAML configuration needed.
+After adding the integration, open the integration options:
+**Settings → Devices & Services → PVAutonomy Ops → Configure**
+
+Key options:
+- **`channel`**: `stable` (production default) or `beta` (testing)
+- **`min_firmware_size_kb`**: minimum allowed firmware size (guard against test stubs)
+
+> **Tip:** For production, keep `channel=stable` and set a sensible `min_firmware_size_kb` (e.g. 1500–2000 KB depending on device).
+
+---
+
+## Optional: Operator Dashboard (Lovelace YAML Example)
+
+HACS installs only the integration under `custom_components/`.  
+The Lovelace dashboard is a **manual** (copy/paste) deployment artifact.
+
+### 1) Copy the example dashboard file
+
+Copy from this repository:
+- [`examples/pvautonomy-ops-dashboard.yaml`](examples/pvautonomy-ops-dashboard.yaml)
+
+to your Home Assistant config folder:
+- `/config/lovelace/pvautonomy-ops-dashboard.yaml`
+
+### 2) Register the dashboard in `configuration.yaml`
+
+Add (see also [`examples/configuration-snippet.yaml`](examples/configuration-snippet.yaml)):
+
+```yaml
+lovelace:
+  dashboards:
+    pvautonomy-ops:
+      mode: yaml
+      title: "🏭 PVAutonomy Ops"
+      icon: mdi:solar-power-variant
+      show_in_sidebar: true
+      filename: lovelace/pvautonomy-ops-dashboard.yaml
+```
+
+### 3) Restart Home Assistant
+
+After restart you should see an **Operations** dashboard in the sidebar.
+
+> **Timestamp note:** All timestamps in the dashboard are shown in local time.
+> Home Assistant Developer Tools may display raw attributes in UTC — this is expected.
 
 ## Entity Overview
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `sensor.pvautonomy_ops_status` | Sensor | Overall system status |
-| `sensor.pvautonomy_ops_device_count` | Sensor | Number of discovered devices |
-| `button.pvautonomy_ops_flash_*` | Button | Trigger firmware flash for a device |
+| `sensor.pvautonomy_ops_status` | Sensor | Overall system status (Output G) |
+| `sensor.pvautonomy_ops_devices_count` | Sensor | Discovered devices with online/offline counts (Output H) |
+| `button.pvautonomy_ops_discover` | Button | Trigger device discovery (Output I) |
+| `button.pvautonomy_ops_run_gates` | Button | Run pre-flight safety gates (Output J) |
+| `button.pvautonomy_ops_flash_production` | Button | Flash firmware to target device (Output K) |
+| `button.pvautonomy_ops_restart_device` | Button | Restart target device (Output L) |
 
-> Full entity list defined in the Ops Contract v1.
+> Full entity list and attributes defined in the [Ops Contract v1.0.0](https://github.com/PVAutonomy/pvautonomy-ops/wiki).
 
 ## Troubleshooting
 

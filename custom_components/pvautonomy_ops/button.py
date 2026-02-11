@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -72,14 +73,36 @@ async def check_gates_passed(hass: HomeAssistant) -> tuple[bool, str]:
     return True, ""
 
 
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up PVAutonomy Ops buttons from a ConfigEntry."""
+    _LOGGER.info("Setting up PVAutonomy Ops buttons (ConfigEntry)")
+
+    operation_runner = hass.data[DOMAIN]["operation_runner"]
+    input_reader = hass.data[DOMAIN]["input_reader"]
+
+    async_add_entities(
+        [
+            PVAutonomyOpsDiscoverButton(hass, operation_runner, input_reader),
+            PVAutonomyOpsRestartButton(hass, operation_runner, input_reader),
+            PVAutonomyOpsRunGatesButton(hass, operation_runner, input_reader),
+            PVAutonomyOpsFlashButton(hass, operation_runner, input_reader),
+        ],
+        True,
+    )
+
+
 async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up PVAutonomy Ops buttons (YAML API)."""
-    _LOGGER.info("Setting up PVAutonomy Ops buttons")
+    """Set up PVAutonomy Ops buttons (legacy YAML, kept for backward compat)."""
+    _LOGGER.info("Setting up PVAutonomy Ops buttons (YAML platform)")
 
     operation_runner = hass.data[DOMAIN]["operation_runner"]
     input_reader = hass.data[DOMAIN]["input_reader"]
@@ -366,27 +389,46 @@ class PVAutonomyOpsFlashButton(ButtonEntity):
             _LOGGER.debug("Created temp dir: %s", temp_dir)
             
             try:
+                # Read runtime config (Options Flow values)
+                config = self.hass.data[DOMAIN].get("config", {})
+                hw_family = config.get("artifact_hw_family_default", "edge101")
+                channel = config.get("artifact_channel", "stable")
+                min_size_kb = config.get("flash_min_firmware_size_kb", 300)
+
                 # STAGE 3: download (30%) - REAL IMPLEMENTATION
                 update_stage("download", 30)
                 _LOGGER.info("Downloading firmware artifact...")
                 
                 # Download firmware from GitHub Releases
                 # MVP: get version from artifacts module
-                firmware_version = get_latest_version("edge101", "stable")
+                firmware_version = get_latest_version(hw_family, channel)
                 artifact = await download_artifact(
                     version=firmware_version,
-                    hw_family="edge101",
+                    hw_family=hw_family,
                     temp_dir=temp_dir,
-                    channel="stable"
+                    channel=channel,
+                    owner=config.get("artifact_owner"),
+                    repo=config.get("artifact_repo"),
                 )
                 
                 flash_state["version"] = artifact.version
                 flash_state["artifact_path"] = str(artifact.firmware_path)
+                firmware_size = artifact.firmware_path.stat().st_size
                 _LOGGER.info(
                     "Downloaded firmware: version=%s, size=%d bytes",
                     artifact.version,
-                    artifact.firmware_path.stat().st_size
+                    firmware_size
                 )
+
+                # MIN_FIRMWARE_SIZE gate (P3-6-001): reject stub/corrupt binaries
+                min_size_bytes = min_size_kb * 1024
+                if firmware_size < min_size_bytes:
+                    flash_state["error"] = (
+                        f"Firmware too small: {firmware_size} bytes "
+                        f"(minimum {min_size_bytes} bytes / {min_size_kb} KB)"
+                    )
+                    update_stage("failed", 0)
+                    raise ValueError(flash_state["error"])
                 
                 # STAGE 4: verify (50%) - REAL IMPLEMENTATION
                 update_stage("verify", 50)

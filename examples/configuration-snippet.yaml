@@ -1,0 +1,19 @@
+# ============================================================
+# PVAutonomy Ops — Dashboard Registration Snippet
+# ============================================================
+# Add this block to your configuration.yaml to register the
+# Operator Dashboard in Home Assistant's sidebar.
+#
+# Requires: pvautonomy_ops >= 0.2.0
+# Contract: v1.0.0
+# ============================================================
+
+lovelace:
+  mode: yaml  # or "storage" if using UI editor for other dashboards
+  dashboards:
+    pvautonomy-ops:
+      mode: yaml
+      title: "🏭 PVAutonomy Ops"
+      icon: mdi:solar-power-variant
+      show_in_sidebar: true
+      filename: lovelace/pvautonomy-ops-dashboard.yaml

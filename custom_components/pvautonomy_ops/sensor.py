@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -28,17 +29,37 @@ from .discovery import ContractInputReader
 _LOGGER = logging.getLogger(__name__)
 
 
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up PVAutonomy Ops sensors from a ConfigEntry."""
+    _LOGGER.info("Setting up PVAutonomy Ops sensors (ConfigEntry)")
+
+    input_reader: ContractInputReader = hass.data[DOMAIN]["input_reader"]
+    operation_tracker = hass.data[DOMAIN]["operation_tracker"]
+
+    async_add_entities(
+        [
+            PVAutonomyOpsStatusSensor(input_reader, operation_tracker),
+            PVAutonomyOpsDevicesCountSensor(input_reader),
+        ],
+        True,
+    )
+
+
 async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up PVAutonomy Ops sensors."""
-    _LOGGER.info("Setting up PVAutonomy Ops sensors")
+    """Set up PVAutonomy Ops sensors (legacy YAML, kept for backward compat)."""
+    _LOGGER.info("Setting up PVAutonomy Ops sensors (YAML platform)")
 
     input_reader: ContractInputReader = hass.data[DOMAIN]["input_reader"]
-    operation_tracker = hass.data[DOMAIN]["operation_tracker"]  # Phase 3
+    operation_tracker = hass.data[DOMAIN]["operation_tracker"]
 
     async_add_entities(
         [

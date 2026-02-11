@@ -1,0 +1,353 @@
+# ============================================================
+# 🏭 PVAutonomy Ops — Operator Dashboard (Example)
+# ============================================================
+# Customer-facing operator surface for PVAutonomy Edge devices.
+# Workflow: Discover → Run Gates → Flash → Restart
+#
+# Requirements:
+#   - pvautonomy_ops >= 0.2.0 (install via HACS)
+#   - Ops Contract v1.0.0
+#
+# Timestamps:
+#   - Dashboard displays local time
+#   - Developer Tools (HA) may show UTC — this is expected
+#
+# Installation:
+#   1. Copy this file to /config/lovelace/pvautonomy-ops-dashboard.yaml
+#   2. Register in configuration.yaml (see examples/configuration-snippet.yaml)
+#   3. Restart Home Assistant
+#
+# Entities used (all from Ops Contract v1.0.0):
+#   - sensor.pvautonomy_ops_status (Output G)
+#   - sensor.pvautonomy_ops_devices_count (Output H)
+#   - button.pvautonomy_ops_discover (Output I)
+#   - button.pvautonomy_ops_run_gates (Action C)
+#   - button.pvautonomy_ops_flash_firmware (Output K / Action B)
+#   - button.pvautonomy_ops_restart_device (Output J / Action E)
+#   - input_select.edge101_selected_production_device (Input B)
+#
+# No new entities created — Lovelace UI only.
+# Created: 2026-02-11 | Phase 3.7 (P3-7-001)
+# ============================================================
+
+title: "PVAutonomy Ops"
+views:
+  - title: Operations
+    path: operations
+    icon: mdi:solar-power-variant
+    badges: []
+    cards:
+
+      # =========================================================
+      # SECTION 1: System Status Overview
+      # =========================================================
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: |
+              # 🏭 PVAutonomy Operations
+
+              Operator surface for deployed Edge101 devices.
+              **Workflow:** Discover → Run Gates → Flash → Restart
+
+          # --- Overall Status ---
+          - type: entities
+            title: "System Status"
+            show_header_toggle: false
+            entities:
+              - entity: sensor.pvautonomy_ops_status
+                name: "Overall Status"
+                icon: mdi:check-circle-outline
+
+              - entity: sensor.pvautonomy_ops_devices_count
+                name: "Devices Found"
+                icon: mdi:devices
+
+              - type: attribute
+                entity: sensor.pvautonomy_ops_devices_count
+                attribute: online
+                name: "Online"
+                icon: mdi:lan-connect
+
+              - type: attribute
+                entity: sensor.pvautonomy_ops_devices_count
+                attribute: offline
+                name: "Offline"
+                icon: mdi:lan-disconnect
+
+      # =========================================================
+      # SECTION 2: Device Selection + Device Info
+      # =========================================================
+      - type: entities
+        title: "Target Device"
+        show_header_toggle: false
+        entities:
+          - entity: input_select.edge101_selected_production_device
+            name: "Select Device"
+            icon: mdi:crosshairs-gps
+
+          - type: attribute
+            entity: sensor.pvautonomy_ops_status
+            attribute: active_device
+            name: "Active Device"
+            icon: mdi:chip
+
+      - type: markdown
+        title: "📡 Device Details"
+        content: |
+          {% set dev = state_attr('sensor.pvautonomy_ops_status', 'active_device') %}
+          {% if dev and dev != 'none' and dev != 'None' %}
+          {% set uptime_s = states('sensor.' ~ dev ~ '_uptime') %}
+          {% set wifi = states('sensor.' ~ dev ~ '_wifi_signal') %}
+          {% set ip = states('sensor.' ~ dev ~ '_ip_adresse') %}
+          {% set update_entity = 'update.' ~ dev ~ '_firmware' %}
+          {% set installed_ver = state_attr(update_entity, 'installed_version') %}
+          {% set latest_ver = state_attr(update_entity, 'latest_version') %}
+          {% set flash_ver = state_attr('sensor.pvautonomy_ops_status', 'flash_version') %}
+          {% set flash_last = state_attr('sensor.pvautonomy_ops_status', 'flash_last_success') %}
+
+          | Field | Value |
+          |:------|:------|
+          | **Device** | {{ dev }} |
+          {% if ip and ip not in ['unknown','unavailable'] %}| **IP** | {{ ip }} |{% endif %}
+          {% if wifi and wifi not in ['unknown','unavailable'] %}| **WiFi** | {{ wifi }} dBm |{% endif %}
+          {% if uptime_s and uptime_s not in ['unknown','unavailable'] %}| **Uptime** | {{ (uptime_s | float(0) / 3600) | round(1) }} h ({{ (uptime_s | float(0) / 60) | round(0) | int }} min) |{% endif %}
+          {% if installed_ver %}| **Running Firmware** | {{ installed_ver }} |{% endif %}
+          {% if latest_ver and latest_ver != installed_ver %}| **Available Update** | {{ latest_ver }} |{% endif %}
+          {% if flash_ver %}| **Last OTA (Ops)** | {{ flash_ver }}{% if flash_last %} — {{ as_timestamp(flash_last) | timestamp_custom('%Y-%m-%d %H:%M', true) }}{% endif %} |{% endif %}
+
+          {% else %}
+          _No device selected — pick one from the dropdown above._
+          {% endif %}
+
+      # =========================================================
+      # SECTION 3: Operation Buttons (Workflow)
+      # =========================================================
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: |
+              ## Workflow Actions
+              Press buttons in order: **① Discover → ② Run Gates → ③ Flash → ④ Restart**
+
+          - type: horizontal-stack
+            cards:
+              - type: button
+                entity: button.pvautonomy_ops_discover
+                name: "① Discover"
+                icon: mdi:magnify-scan
+                tap_action:
+                  action: toggle
+                show_state: false
+
+              - type: button
+                entity: button.pvautonomy_ops_run_gates
+                name: "② Run Gates"
+                icon: mdi:shield-check
+                tap_action:
+                  action: toggle
+                show_state: false
+
+              - type: button
+                entity: button.pvautonomy_ops_flash_production
+                name: "③ Flash"
+                icon: mdi:download-box
+                tap_action:
+                  action: toggle
+                show_state: false
+
+              - type: button
+                entity: button.pvautonomy_ops_restart_device
+                name: "④ Restart"
+                icon: mdi:restart
+                tap_action:
+                  action: toggle
+                show_state: false
+
+      # =========================================================
+      # SECTION 4: Flash Guard Status + Block Reasons
+      # =========================================================
+      - type: vertical-stack
+        cards:
+          # --- UX Warnings (all Jinja-based, no conditional cards) ---
+          - type: markdown
+            content: |
+              {% set overall = state_attr('sensor.pvautonomy_ops_status', 'gates_overall') %}
+              {% set gates_last = state_attr('sensor.pvautonomy_ops_status', 'gates_last_run') %}
+              {% set op_state_val = state_attr('sensor.pvautonomy_ops_status', 'op_state') %}
+              {% set op_name = state_attr('sensor.pvautonomy_ops_status', 'op_name') %}
+              {% set last_error = state_attr('sensor.pvautonomy_ops_status', 'last_error') %}
+              {% set last_error_time = state_attr('sensor.pvautonomy_ops_status', 'last_error_time') %}
+              {% set fail_list = state_attr('sensor.pvautonomy_ops_status', 'gates_fail') %}
+              {% set warn_list = state_attr('sensor.pvautonomy_ops_status', 'gates_warn') %}
+              {% set flash_stage = state_attr('sensor.pvautonomy_ops_status', 'flash_stage') %}
+              {% set flash_version = state_attr('sensor.pvautonomy_ops_status', 'flash_version') %}
+              {% set flash_last_success = state_attr('sensor.pvautonomy_ops_status', 'flash_last_success') %}
+
+              {% if op_name == 'flash_firmware' and op_state_val == 'running' %}
+              ## 🔄 Flash In Progress
+
+              Firmware update is running — do not power off the device.
+
+              ---
+              {% elif flash_stage in ['complete', 'done'] and op_name == 'flash_firmware' and op_state_val == 'success' %}
+              ## ✅ Flash Complete
+
+              Firmware **{{ flash_version or '?' }}** flashed successfully.
+              {% if flash_last_success %}**Time:** {{ as_timestamp(flash_last_success) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% endif %}
+
+              ---
+              {% elif overall is not none and overall != 'pass' %}
+              ## ⚠️ Flash Blocked
+
+              Gates result: **{{ overall }}** — Flash will be rejected.
+              Press **② Run Gates** first, then review results below.
+
+              {% if fail_list %}**Failed gates:**
+              {% for g in fail_list %}- ❌ {{ g }}
+              {% endfor %}{% endif %}
+              {% if warn_list %}**Warnings:**
+              {% for g in warn_list %}- ⚠️ {{ g }}
+              {% endfor %}{% endif %}
+
+              ---
+              {% elif overall == 'pass' %}
+              ## ✅ Flash Ready
+
+              All gates passed. You may press **③ Flash**.
+
+              ---
+              {% elif overall is none %}
+              ## ℹ️ Gates Not Run Yet
+
+              Press **② Run Gates** to perform pre-flight checks.
+
+              ---
+              {% endif %}
+
+              {% if gates_last %}
+              {% set age_min = ((as_timestamp(now()) - as_timestamp(gates_last)) / 60) | round(1) %}
+              {% if age_min > 10 %}
+              ## ⏰ Gates Stale ({{ age_min }} min ago)
+
+              Gate results are older than 10 minutes.
+              Press **② Run Gates** to refresh before flashing.
+
+              ---
+              {% endif %}
+              {% endif %}
+
+              {% if op_state_val == 'error' %}
+              ## ❌ Last Operation Failed
+
+              **Error:** {{ last_error or 'Unknown' }}
+              {% if last_error_time %}**Time:** {{ as_timestamp(last_error_time) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% endif %}
+              {% endif %}
+
+          # --- Gates Detail Card ---
+          - type: markdown
+            title: "🛡️ Pre-Flight Gates"
+            content: |
+              {% set overall = state_attr('sensor.pvautonomy_ops_status', 'gates_overall') %}
+              {% set passed = state_attr('sensor.pvautonomy_ops_status', 'gates_passed_count') %}
+              {% set failed = state_attr('sensor.pvautonomy_ops_status', 'gates_failed_count') %}
+              {% set warned = state_attr('sensor.pvautonomy_ops_status', 'gates_warn_count') %}
+              {% set gates_last = state_attr('sensor.pvautonomy_ops_status', 'gates_last_run') %}
+
+              | Check | Value |
+              |:------|:------|
+              | **Overall** | {% if overall == 'pass' %}✅ PASS{% elif overall == 'fail' %}❌ FAIL{% elif overall == 'warn' %}⚠️ WARN{% else %}— not run —{% endif %} |
+              | **Passed** | {{ passed if passed is not none else '—' }} |
+              | **Failed** | {{ failed if failed is not none else '—' }} |
+              | **Warnings** | {{ warned if warned is not none else '—' }} |
+              | **Last Run** | {% if gates_last %}{{ as_timestamp(gates_last) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% else %}never{% endif %} |
+              {% if gates_last %}| **Age** | {{ ((as_timestamp(now()) - as_timestamp(gates_last)) / 60) | round(1) }} min |{% endif %}
+
+              {% set details = state_attr('sensor.pvautonomy_ops_status', 'gates_details') %}
+              {% if details and details is mapping %}
+              **Gate Details:**
+              {% for gid, gate in details.items() %}
+              - {% if gate.status == 'pass' %}✅{% elif gate.status == 'fail' %}❌{% else %}⚠️{% endif %} **{{ gate.gate_name | default(gid) }}**: {{ gate.evidence | default('') }}
+              {% endfor %}
+              {% endif %}
+
+      # =========================================================
+      # SECTION 5: Flash Status
+      # =========================================================
+      - type: markdown
+        title: "⚡ Flash Status"
+        content: |
+          {% set stage = state_attr('sensor.pvautonomy_ops_status', 'flash_stage') %}
+          {% set version = state_attr('sensor.pvautonomy_ops_status', 'flash_version') %}
+          {% set target = state_attr('sensor.pvautonomy_ops_status', 'flash_target_device') %}
+          {% set last_ok = state_attr('sensor.pvautonomy_ops_status', 'flash_last_success') %}
+          {% set last_err = state_attr('sensor.pvautonomy_ops_status', 'flash_last_error') %}
+          {% set last_err_time = state_attr('sensor.pvautonomy_ops_status', 'flash_last_error_time') %}
+
+          | Field | Value |
+          |:------|:------|
+          | **Stage** | {% if stage %}{% if stage == 'done' %}✅ {{ stage }}{% elif stage == 'error' %}❌ {{ stage }}{% elif stage in ['idle', 'None'] %}⏸️ idle{% else %}🔄 {{ stage }}{% endif %}{% else %}⏸️ idle{% endif %} |
+          | **Firmware** | {{ version or '—' }} |
+          | **Target** | {{ target or '—' }} |
+          | **Last Success** | {% if last_ok %}{{ as_timestamp(last_ok) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% else %}—{% endif %} |
+          {% if last_err %}| **Last Error** | {{ last_err }} |{% endif %}
+          {% if last_err_time %}| **Error Time** | {{ as_timestamp(last_err_time) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }} |{% endif %}
+
+      # =========================================================
+      # SECTION 6: Current Operation Detail
+      # =========================================================
+      - type: markdown
+        title: "📋 Current Operation"
+        content: |
+          {% set op_name = state_attr('sensor.pvautonomy_ops_status', 'op_name') %}
+          {% set op_state_val = state_attr('sensor.pvautonomy_ops_status', 'op_state') %}
+          {% set op_progress = state_attr('sensor.pvautonomy_ops_status', 'op_progress') %}
+          {% set op_started = state_attr('sensor.pvautonomy_ops_status', 'op_started') %}
+          {% set op_finished = state_attr('sensor.pvautonomy_ops_status', 'op_finished') %}
+          {% set op_duration = state_attr('sensor.pvautonomy_ops_status', 'op_duration_ms') %}
+
+          | Field | Value |
+          |:------|:------|
+          | **Operation** | {{ op_name or 'none' }} |
+          | **State** | {% if op_state_val == 'success' %}✅ {{ op_state_val }}{% elif op_state_val == 'error' %}❌ {{ op_state_val }}{% elif op_state_val == 'running' %}🔄 {{ op_state_val }}{% else %}{{ op_state_val or 'idle' }}{% endif %} |
+          {% if op_progress is not none %}| **Progress** | {{ op_progress }}% |{% endif %}
+          | **Started** | {% if op_started %}{{ as_timestamp(op_started) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% else %}—{% endif %} |
+          | **Finished** | {% if op_finished %}{{ as_timestamp(op_finished) | timestamp_custom('%Y-%m-%d %H:%M:%S', true) }}{% else %}—{% endif %} |
+          {% if op_duration %}| **Duration** | {{ op_duration }} ms |{% endif %}
+
+      # =========================================================
+      # SECTION 7: System Info + Operator Help
+      # =========================================================
+      - type: markdown
+        title: "ℹ️ Operator Help"
+        content: |
+          {% set ver = state_attr('sensor.pvautonomy_ops_status', 'version') %}
+          {% set contract = state_attr('sensor.pvautonomy_ops_status', 'contract_version') %}
+
+          **Integration:** pvautonomy_ops v{{ ver or '?' }}
+          **Contract:** v{{ contract or '?' }}
+
+          ---
+
+          ### How to Operate
+
+          1. **Discover** — Scans for Edge101 devices on the network
+          2. **Select Device** — Pick the target device from the dropdown
+          3. **Run Gates** — Pre-flight checks (device online, firmware available, etc.)
+          4. **Flash** — Downloads firmware and uploads via OTA (only when gates PASS)
+          5. **Restart** — Reboots the selected device
+
+          ### Troubleshooting
+
+          | Symptom | Action |
+          |:--------|:-------|
+          | Flash blocked | Run Gates first, check block reasons above |
+          | Gates stale warning | Press Run Gates to refresh |
+          | Device not found | Press Discover, check device is powered on |
+          | Flash error | Check logs: `ha core logs \| grep pvautonomy` |
+          | Operation stuck | Restart HA: `ha core restart` |
+
+          ---
+
+          _All timestamps displayed in local time (Europe/Vienna)._
+          _UTC timestamps in Developer Tools are the SSOT (not a bug)._
