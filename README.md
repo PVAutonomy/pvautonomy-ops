@@ -9,15 +9,18 @@ Home Assistant integration for fleet management of PVAutonomy edge devices (ESP3
 
 ## Features
 
-- **Device Discovery** — Automatic detection of PVAutonomy edge devices on the local network
+- **Device Discovery** — Automatic detection of PVAutonomy edge devices via HA Device Registry
+- **Factory + Production Mode** — Distinguishes factory (bootstrap) vs production devices with guided next steps
 - **OTA Firmware Updates** — One-click firmware flashing via espota2 protocol (SHA256 auth)
-- **Operational Sensors** — Real-time device status, firmware version, connectivity health
+- **Config Flow** — UI-based setup, no YAML configuration needed
+- **Quality Gates** — Pre-flight safety checks before flashing (device online, firmware verified, size gate)
 - **Flash Guard** — 7-stage state machine with safety gates (pre-flight checks, rollback detection)
-- **Contract-Based API** — Stable entity surface defined by [Ops Contract v1](https://github.com/PVAutonomy/pvautonomy-ops/wiki)
+- **Operational Sensors** — Real-time device status, firmware version, connectivity health
+- **Contract-Based API** — Stable entity surface defined by Ops Contract v1.0.0
 
 ## Requirements
 
-- Home Assistant **2025.12.0** or newer
+- Home Assistant **2024.1.0** or newer
 - HACS installed
 - PVAutonomy edge device(s) on the same network
 
@@ -67,21 +70,37 @@ Add (see also [`examples/configuration-snippet.yaml`](examples/configuration-sni
 
 ```yaml
 lovelace:
+  mode: storage
   dashboards:
-    pvautonomy-ops:
+    lovelace-pvautonomy-ops:
       mode: yaml
-      title: "🏭 PVAutonomy Ops"
-      icon: mdi:solar-power-variant
+      title: PVAutonomy Ops
+      icon: mdi:factory
       show_in_sidebar: true
       filename: lovelace/pvautonomy-ops-dashboard.yaml
 ```
 
+> **Note:** `mode: storage` at the top level keeps your default Overview dashboard editable via UI.
+> The named dashboard underneath uses `mode: yaml` to load the Ops dashboard from file.
+
 ### 3) Restart Home Assistant
 
-After restart you should see an **Operations** dashboard in the sidebar.
+After restart you should see **PVAutonomy Ops** in the sidebar.
 
-> **Timestamp note:** All timestamps in the dashboard are shown in local time.
-> Home Assistant Developer Tools may display raw attributes in UTC — this is expected.
+### Dashboard Features
+
+| Section | Description |
+|---------|-------------|
+| **System Status** | Overall status, devices online/offline |
+| **Target Device** | Dropdown to select Factory or Production device |
+| **Device Details** | Mode (Factory/Production), WiFi, Uptime, Firmware |
+| **Workflow Actions** | ① Discover → ② Run Gates → ③ Flash → ④ Restart |
+| **Pre-Flight Gates** | Gate results table (pass/fail/warn) |
+| **Flash Status** | Current flash stage, target, last success |
+
+When you select a device, the dashboard automatically detects its mode:
+- **⚡ Factory (Bootstrap):** Shows next steps — connect RS485, choose inverter, flash production firmware
+- **✅ Production:** Shows live metrics — WiFi signal, uptime, running firmware version
 
 ## Entity Overview
 
@@ -91,10 +110,10 @@ After restart you should see an **Operations** dashboard in the sidebar.
 | `sensor.pvautonomy_ops_devices_count` | Sensor | Discovered devices with online/offline counts (Output H) |
 | `button.pvautonomy_ops_discover` | Button | Trigger device discovery (Output I) |
 | `button.pvautonomy_ops_run_gates` | Button | Run pre-flight safety gates (Output J) |
-| `button.pvautonomy_ops_flash_production` | Button | Flash firmware to target device (Output K) |
+| `button.pvautonomy_ops_flash_firmware` | Button | Flash firmware to target device (Output K) |
 | `button.pvautonomy_ops_restart_device` | Button | Restart target device (Output L) |
 
-> Full entity list and attributes defined in the [Ops Contract v1.0.0](https://github.com/PVAutonomy/pvautonomy-ops/wiki).
+> Full entity list and attributes defined in the Ops Contract v1.0.0.
 
 ## Troubleshooting
 

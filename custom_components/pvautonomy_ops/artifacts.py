@@ -64,7 +64,9 @@ async def download_artifact(
     version: str,
     hw_family: str,
     temp_dir: Path,
-    channel: str = "stable"
+    channel: str = "stable",
+    owner: str | None = None,
+    repo: str | None = None,
 ) -> FirmwareArtifact:
     """Download firmware artifact from GitHub Releases.
     
@@ -73,6 +75,8 @@ async def download_artifact(
         hw_family: Hardware family (e.g., "edge101")
         temp_dir: Temporary directory for downloads
         channel: Release channel (stable|beta|dev)
+        owner: GitHub owner (overrides const.py default)
+        repo: GitHub repo (overrides const.py default)
         
     Returns:
         FirmwareArtifact with validated manifest and firmware
@@ -88,9 +92,14 @@ async def download_artifact(
     )
     
     # Construct artifact URLs (MVP flat pattern)
-    # Pattern: {ARTIFACTS_BASE_URL}/v{version}/{file}
+    # Pattern: {base_url}/v{version}/{file}
     # GitHub Releases serve assets at root level (no hw_family subdirectory)
-    base_url = f"{ARTIFACTS_BASE_URL}/v{version}"
+    # If owner/repo provided, construct dynamic base_url; else use const default
+    if owner and repo:
+        effective_base_url = f"https://github.com/{owner}/{repo}/releases/download"
+    else:
+        effective_base_url = ARTIFACTS_BASE_URL
+    base_url = f"{effective_base_url}/v{version}"
     manifest_url = f"{base_url}/manifest.json"
     firmware_url = f"{base_url}/firmware.bin"
     

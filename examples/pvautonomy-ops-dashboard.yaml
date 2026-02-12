@@ -1,21 +1,8 @@
 # ============================================================
-# 🏭 PVAutonomy Ops — Operator Dashboard (Example)
+# 🏭 PVAutonomy Ops — Operator Dashboard
 # ============================================================
 # Customer-facing operator surface for PVAutonomy Edge devices.
 # Workflow: Discover → Run Gates → Flash → Restart
-#
-# Requirements:
-#   - pvautonomy_ops >= 0.2.0 (install via HACS)
-#   - Ops Contract v1.0.0
-#
-# Timestamps:
-#   - Dashboard displays local time
-#   - Developer Tools (HA) may show UTC — this is expected
-#
-# Installation:
-#   1. Copy this file to /config/lovelace/pvautonomy-ops-dashboard.yaml
-#   2. Register in configuration.yaml (see examples/configuration-snippet.yaml)
-#   3. Restart Home Assistant
 #
 # Entities used (all from Ops Contract v1.0.0):
 #   - sensor.pvautonomy_ops_status (Output G)
@@ -96,7 +83,35 @@ views:
         title: "📡 Device Details"
         content: |
           {% set dev = state_attr('sensor.pvautonomy_ops_status', 'active_device') %}
+          {% set dev_kind = state_attr('sensor.pvautonomy_ops_status', 'active_device_kind') %}
           {% if dev and dev != 'none' and dev != 'None' %}
+
+          {% if dev_kind == 'factory' %}
+          ### ⚡ Factory Device Selected
+
+          **{{ dev }}** is running **Factory firmware** (bootstrap mode).
+
+          **Next steps:**
+          1. Connect RS485 cable to inverter
+          2. Choose inverter type (coming soon)
+          3. Flash Production firmware via ③ Flash
+
+          {% set dev_entity = dev | lower | replace(' ', '_') | replace('-', '_') %}
+          {% set ip = states('text_sensor.' ~ dev_entity ~ '_ip_address') %}
+          {% set mac = states('text_sensor.' ~ dev_entity ~ '_mac_address') %}
+          {% set wifi = states('sensor.' ~ dev_entity ~ '_wifi_signal') %}
+          {% set uptime_s = states('sensor.' ~ dev_entity ~ '_uptime') %}
+
+          | Field | Value |
+          |:------|:------|
+          | **Device** | {{ dev }} |
+          | **Mode** | 🏭 Factory (Bootstrap) |
+          {% if ip and ip not in ['unknown','unavailable'] %}| **IP** | {{ ip }} |{% endif %}
+          {% if mac and mac not in ['unknown','unavailable'] %}| **MAC** | {{ mac }} |{% endif %}
+          {% if wifi and wifi not in ['unknown','unavailable'] %}| **WiFi** | {{ wifi }} dBm |{% endif %}
+          {% if uptime_s and uptime_s not in ['unknown','unavailable'] %}| **Uptime** | {{ (uptime_s | float(0) / 60) | round(0) | int }} min |{% endif %}
+
+          {% else %}
           {% set uptime_s = states('sensor.' ~ dev ~ '_uptime') %}
           {% set wifi = states('sensor.' ~ dev ~ '_wifi_signal') %}
           {% set ip = states('sensor.' ~ dev ~ '_ip_adresse') %}
@@ -109,15 +124,22 @@ views:
           | Field | Value |
           |:------|:------|
           | **Device** | {{ dev }} |
+          | **Mode** | ✅ Production |
           {% if ip and ip not in ['unknown','unavailable'] %}| **IP** | {{ ip }} |{% endif %}
           {% if wifi and wifi not in ['unknown','unavailable'] %}| **WiFi** | {{ wifi }} dBm |{% endif %}
           {% if uptime_s and uptime_s not in ['unknown','unavailable'] %}| **Uptime** | {{ (uptime_s | float(0) / 3600) | round(1) }} h ({{ (uptime_s | float(0) / 60) | round(0) | int }} min) |{% endif %}
           {% if installed_ver %}| **Running Firmware** | {{ installed_ver }} |{% endif %}
           {% if latest_ver and latest_ver != installed_ver %}| **Available Update** | {{ latest_ver }} |{% endif %}
           {% if flash_ver %}| **Last OTA (Ops)** | {{ flash_ver }}{% if flash_last %} — {{ as_timestamp(flash_last) | timestamp_custom('%Y-%m-%d %H:%M', true) }}{% endif %} |{% endif %}
+          {% endif %}
 
           {% else %}
           _No device selected — pick one from the dropdown above._
+
+          {% set factory_devs = state_attr('sensor.pvautonomy_ops_status', 'factory_devices') %}
+          {% if factory_devs and factory_devs | length > 0 %}
+          **💡 Tip:** Press **① Discover** to find Factory devices ready for setup.
+          {% endif %}
           {% endif %}
 
       # =========================================================

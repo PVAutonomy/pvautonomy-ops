@@ -164,9 +164,12 @@ class PVAutonomyOpsDiscoverButton(ButtonEntity):
         )
         
         # Update button attributes with result
+        discover_result = result.get("result", {})
         self._attr_extra_state_attributes = {
             "last_result": "success" if result["success"] else "error",
-            "devices_found": result.get("result", {}).get("devices_found"),
+            "devices_found": discover_result.get("devices_found"),
+            "factory_count": discover_result.get("factory_count", 0),
+            "production_count": discover_result.get("production_count", 0),
             "duration_ms": result["duration_ms"],
             "error_message": result.get("error"),
         }
@@ -184,26 +187,58 @@ class PVAutonomyOpsDiscoverButton(ButtonEntity):
         )
 
     async def _execute_discover(self) -> dict[str, Any]:
-        """Execute discovery logic.
+        """Execute discovery logic via HA Device Registry.
+        
+        P3-8-001: Active scan of Device Registry (Factory + Production).
+        D-OPS-FACTORY-DISCOVERY-001
         
         Returns:
             Dict with discovery results:
                 - devices_found: int
-                - devices_new: int (always 0 for re-scan)
-                - devices_removed: int (always 0 for re-scan)
-                - devices: list[dict]
+                - factory_count: int
+                - production_count: int
+                - factory_devices: list[dict]
+                - production_devices: list[dict]
         """
-        # Get current discovered devices (re-reads Input A)
-        devices = await self.input_reader.get_discovered_devices()
+        # Primary: Device Registry scan (Factory + Production)
+        registry_devices = await self.input_reader.get_registry_devices()
         
-        # For MVP: Discovery is passive (just re-reads template sensor)
-        # Future: Active scan of inverter registry + ESPHome devices
+        factory = registry_devices.get("factory", [])
+        production = registry_devices.get("production", [])
+        total = len(factory) + len(production)
+
+        # Also read legacy template sensor for backward compatibility
+        legacy_devices = await self.input_reader.get_discovered_devices()
+        
+        # Populate dropdown with merged device list
+        dropdown_items = await self.input_reader.get_all_devices_for_dropdown()
+        if dropdown_items:
+            options = ["none"] + [item["value"] for item in dropdown_items]
+            try:
+                await self.hass.services.async_call(
+                    "input_select",
+                    "set_options",
+                    {
+                        "entity_id": "input_select.edge101_selected_production_device",
+                        "options": options,
+                    },
+                    blocking=True,
+                )
+                _LOGGER.info(
+                    "Dropdown updated with %d devices: %s",
+                    len(dropdown_items),
+                    options,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to update dropdown: %s", err)
         
         return {
-            "devices_found": len(devices),
-            "devices_new": 0,  # MVP: no diff tracking yet
-            "devices_removed": 0,
-            "devices": [{"entity_id": d} for d in devices],
+            "devices_found": total,
+            "factory_count": len(factory),
+            "production_count": len(production),
+            "factory_devices": factory,
+            "production_devices": production,
+            "legacy_devices": legacy_devices,
         }
 
 

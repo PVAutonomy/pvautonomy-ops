@@ -9,11 +9,11 @@
 # ============================================================
 
 lovelace:
-  mode: yaml  # or "storage" if using UI editor for other dashboards
+  mode: storage  # keeps default Overview dashboard editable via UI
   dashboards:
-    pvautonomy-ops:
+    lovelace-pvautonomy-ops:
       mode: yaml
-      title: "🏭 PVAutonomy Ops"
-      icon: mdi:solar-power-variant
+      title: PVAutonomy Ops
+      icon: mdi:factory
       show_in_sidebar: true
       filename: lovelace/pvautonomy-ops-dashboard.yaml

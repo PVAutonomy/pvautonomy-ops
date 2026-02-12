@@ -206,6 +206,12 @@ class PVAutonomyOpsStatusSensor(SensorEntity):
             devices = await self.input_reader.get_discovered_devices()
             selected = await self.input_reader.get_selected_device()
 
+            # P3-8-001: Device Registry scan for Factory + Production
+            registry_devices = await self.input_reader.get_registry_devices()
+            factory_devices = registry_devices.get("factory", [])
+            production_devices = registry_devices.get("production", [])
+            selected_kind = await self.input_reader.get_selected_device_kind()
+
             devices_online = 0
             devices_offline = 0
 
@@ -292,8 +298,15 @@ class PVAutonomyOpsStatusSensor(SensorEntity):
                 "devices_online": devices_online,
                 "devices_offline": devices_offline,
                 "active_device": selected,
+                "active_device_kind": selected_kind,
                 "last_error": last_error or op_attrs.get("last_error"),
                 "last_error_time": last_error_time or op_attrs.get("last_error_time"),
+                
+                # P3-8-001: Factory + Production device lists (D-OPS-FACTORY-DISCOVERY-001 R4)
+                "factory_devices": [d["name"] for d in factory_devices],
+                "production_devices": [d["name"] for d in production_devices],
+                "factory_count": len(factory_devices),
+                "production_count": len(production_devices),
                 
                 # Phase 3 extensions (operation lifecycle)
                 "op_state": op_attrs.get("op_state"),
@@ -333,11 +346,18 @@ class PVAutonomyOpsDevicesCountSensor(SensorEntity):
     def __init__(self, input_reader: ContractInputReader) -> None:
         self.input_reader = input_reader
         self._attr_native_value = 0
-        self._attr_extra_state_attributes = {"online": 0, "offline": 0, "unknown": 0}
+        self._attr_extra_state_attributes = {
+            "online": 0,
+            "offline": 0,
+            "unknown": 0,
+            "factory": 0,
+            "production": 0,
+        }
 
     async def async_update(self) -> None:
         try:
             devices = await self.input_reader.get_discovered_devices()
+            registry_devices = await self.input_reader.get_registry_devices()
 
             online = 0
             offline = 0
@@ -352,11 +372,16 @@ class PVAutonomyOpsDevicesCountSensor(SensorEntity):
                 else:
                     online += 1
 
-            self._attr_native_value = len(devices)
+            factory_count = len(registry_devices.get("factory", []))
+            production_count = len(registry_devices.get("production", []))
+
+            self._attr_native_value = len(devices) + factory_count
             self._attr_extra_state_attributes = {
                 "online": online,
                 "offline": offline,
                 "unknown": unknown,
+                "factory": factory_count,
+                "production": production_count,
             }
 
         except Exception as e:
