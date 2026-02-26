@@ -109,15 +109,15 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> "PVAutonomyOpsOptionsFlow":
         """Get the options flow handler."""
-        return PVAutonomyOpsOptionsFlow(config_entry)
+        return PVAutonomyOpsOptionsFlow()
 
 
 class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
-    """Handle options for PVAutonomy Ops."""
+    """Handle options for PVAutonomy Ops.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
+    Note: self.config_entry is a read-only property provided by the HA
+    OptionsFlow base class — do NOT set it in __init__.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
