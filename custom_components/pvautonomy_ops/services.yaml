@@ -1,0 +1,354 @@
+# PVAutonomy Ops — HA Services (P3-13-001, EPIC-015 P1-06)
+# These services drive the post-install wizard stepper.
+# All services accept an optional entry_id for multi-entry targeting.
+
+start_initial_setup:
+  name: Start Initial Setup
+  description: >-
+    Start the Factory → Production wizard.
+    Guides through device selection, configuration, build,
+    install, encryption key saving, and verification.
+  fields:
+    device_id:
+      name: Device ID
+      description: Factory device to set up (optional — can be selected in wizard).
+      required: false
+      example: "edge101_sph10k_haus_02"
+      selector:
+        text:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+start_reconfigure:
+  name: Start Re-Configure
+  description: >-
+    Start the Production → Production re-configure wizard.
+    Replaces existing firmware with a new device-specific configuration.
+  fields:
+    device_id:
+      name: Device ID
+      description: Production device to re-configure (optional).
+      required: false
+      example: "edge101_sph10k_haus_01"
+      selector:
+        text:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+start_factory_reset:
+  name: Start Factory Reset
+  description: >-
+    Start the Production → Factory reset wizard.
+    Erases all device-specific configuration and returns to factory state.
+  fields:
+    device_id:
+      name: Device ID
+      description: Production device to reset (optional).
+      required: false
+      example: "edge101_sph10k_haus_01"
+      selector:
+        text:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+wizard_advance:
+  name: Advance Wizard
+  description: >-
+    Advance the active wizard to the next stage.
+    Provide required context for the current stage (device selection,
+    configuration parameters, confirmations).
+  fields:
+    device_id:
+      name: Device ID
+      description: Selected device (for selection stages).
+      required: false
+      selector:
+        text:
+    device_kind:
+      name: Device Kind
+      description: "Device type: 'factory' or 'production'."
+      required: false
+      selector:
+        select:
+          options:
+            - factory
+            - production
+    model:
+      name: Inverter Model
+      description: Inverter model slug (e.g. sph10k, mic600).
+      required: false
+      selector:
+        text:
+    site:
+      name: Site
+      description: Installation location (e.g. haus, garage).
+      required: false
+      selector:
+        text:
+    number:
+      name: Device Number
+      description: Device number at site (e.g. 01, 02).
+      required: false
+      selector:
+        text:
+    registry_file:
+      name: Registry File
+      description: Relative path to inverter registry JSON.
+      required: false
+      example: "growatt/sph/sph10k.json"
+      selector:
+        text:
+    mac_suffix:
+      name: MAC Suffix
+      description: 6-char hex MAC suffix for device-specific secrets.
+      required: false
+      example: "2eb1e4"
+      selector:
+        text:
+    encryption_key:
+      name: Encryption Key
+      description: API encryption key for the device.
+      required: false
+      selector:
+        text:
+    confirmed:
+      name: Confirmed
+      description: User confirmation for destructive actions.
+      required: false
+      selector:
+        boolean:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+wizard_abort:
+  name: Abort Wizard
+  description: Abort the currently active wizard and return to idle state.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+install_prepared_firmware:
+  name: Install Prepared Firmware
+  description: >-
+    Install the already prepared firmware artifact for the selected
+    production device via the existing ESPHome OTA path. This service is
+    INSTALL-ONLY: it never runs the build pipeline, never dispatches a
+    proxy / GitHub Actions build, never calls the wizard / reconfigure /
+    factory reset paths, and never writes inverter settings. The artifact
+    must have been produced earlier by ``pvautonomy_ops.build_firmware``
+    and is read from the canonical builds directory. The Edge device will
+    reboot briefly after the upload completes.
+  fields:
+    device_name:
+      name: Device Name
+      description: >-
+        Target device identifier (e.g. "sph10k_home_02" or the canonical
+        device id). Optional. If omitted, the entry's currently selected
+        device is used; if exactly one device is registered, that device
+        is used; otherwise the call fails closed.
+      required: false
+      example: "sph10k_home_02"
+      selector:
+        text:
+    confirmed:
+      name: Confirmed
+      description: >-
+        Must be ``true``. The service refuses to install firmware without
+        explicit confirmation.
+      required: true
+      selector:
+        boolean:
+    entry_id:
+      name: Config Entry ID
+      description: >-
+        Target config entry (required when multiple entries exist).
+        Support-only field — must not be exposed in the customer UI.
+      required: false
+      selector:
+        text:
+
+build_firmware:
+  name: Build Firmware (no flash)
+  description: >-
+    Build production firmware for a device through the normal PVAutonomy
+    proxy → GitHub Actions path (including per-device compile-secret
+    injection) and store the resulting firmware artifact locally. This
+    service is BUILD-ONLY: it never performs OTA, never flashes, installs,
+    or reconfigures any device, and never writes inverter registers. Build
+    metadata (build ID, cache hit, artifact path, firmware size, target
+    device, registry file, backend) is exposed via the status sensor
+    attributes and build-stage events. A separate, explicit flash/install
+    action is required to install the prepared artifact.
+  fields:
+    device_name:
+      name: Device Name
+      description: >-
+        Target device identifier (e.g. "sph10k_home_02" or the canonical
+        device id). Optional. If omitted, the entry's currently selected
+        device is used; if exactly one device is registered, that device is
+        used; otherwise the call fails closed.
+      required: false
+      example: "sph10k_home_02"
+      selector:
+        text:
+    force_rebuild:
+      name: Force Rebuild (cache bypass)
+      description: >-
+        When true, bypass the proxy artifact cache so a cold GitHub Actions
+        build runs even if the locally generated YAML is unchanged. Use this
+        when the external inverter-registry changed but the local config did
+        not. If the proxy still returns a cached artifact, the service fails
+        closed instead of reporting success.
+      required: false
+      default: false
+      selector:
+        boolean:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+confirm_key_saved:
+  name: Confirm Key Saved
+  description: >-
+    Confirm that the API encryption key has been saved.
+    Only valid during the "Save Encryption Key" stage of Initial Setup.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+refresh_customer_dashboard:
+  name: Refresh Customer Dashboard
+  description: >-
+    Rebuild the stored Lovelace dashboard for a PVAutonomy customer device
+    using the currently deployed dashboard_builder. The registry entry under
+    .storage/lovelace_dashboards is kept idempotent; the
+    .storage/lovelace.{url_path} config is rewritten so that recent
+    dashboard_builder changes take effect without an HA restart, Wizard run,
+    Options update, ESPHome action, or browser-side refresh. No Modbus
+    register is written.
+  fields:
+    device_name:
+      name: Device Name (slug)
+      description: >-
+        Target device slug (e.g. "sph10k_home_02"). Optional. If omitted,
+        the entry's currently selected device is used; if exactly one
+        device is registered, that device is used; otherwise the call
+        fails closed.
+      required: false
+      example: "sph10k_home_02"
+      selector:
+        text:
+    display_title:
+      name: Display Title
+      description: >-
+        Optional override for the dashboard sidebar title. Defaults to the
+        model's display name from MODEL_REGISTRY_MAP.
+      required: false
+      example: "Growatt SPH10K"
+      selector:
+        text:
+    registry_file:
+      name: Registry File
+      description: >-
+        Optional override for the inverter registry JSON path. Defaults to
+        the device metadata's registry_file. Use only when intentionally
+        rendering a non-default registry for the device.
+      required: false
+      example: "growatt/sph/sph10k.json"
+      selector:
+        text:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required when multiple entries exist).
+      required: false
+      selector:
+        text:
+
+set_compile_secret_key:
+  name: Set Compile Secret Key
+  description: >-
+    Provision the repo-wide AES-256 compile-secret key into the keyring.
+    HA uses this key to AES-256-GCM-encrypt the per-build compile secrets
+    (api encryption key + OTA password) before sending them to the proxy;
+    the firmware build workflow decrypts them. WARNING: the value MUST
+    exactly match the GitHub Actions repository secret COMPILE_SECRET_KEY
+    in PVAutonomy/inverter-registry, otherwise builds fail to decrypt. The
+    key is never logged (only a non-secret sha256 fingerprint is recorded).
+    CALL FROM Developer Tools -> Actions (UI) ONLY — never from an
+    automation/script (service_data may persist in traces/recorder/logbook).
+    Avoid YAML mode, screen sharing, and clipboard persistence. See
+    docs/COMPILE-SECRET-KEY-PROVISIONING.md for the full runbook and the
+    exposure-recovery (clear + rotate both sides) procedure.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required).
+      required: true
+      selector:
+        text:
+    compile_secret_key:
+      name: Compile Secret Key (64 hex)
+      description: >-
+        64-character hex string (32-byte AES-256 key). Must equal the GHA
+        repo secret COMPILE_SECRET_KEY. Provisioned out-of-band; never
+        commit or share this value.
+      required: true
+      example: "<COMPILE_SECRET_KEY>"
+      selector:
+        text:
+          type: password
+
+clear_compile_secret_key:
+  name: Clear Compile Secret Key
+  description: >-
+    Remove the stored repo-wide compile-secret key from the keyring (e.g.
+    before rotation). After clearing, secret-bearing proxy builds fail
+    closed until a new key is provisioned.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required).
+      required: true
+      selector:
+        text:
+
+compile_secret_key_status:
+  name: Compile Secret Key Status
+  description: >-
+    Report whether a repo-wide compile-secret key is provisioned. Returns
+    only {present, fingerprint} — never any raw key material. The
+    fingerprint is sha256(key)[:8] for correlation across rotations.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: Target config entry (required).
+      required: true
+      selector:
+        text:

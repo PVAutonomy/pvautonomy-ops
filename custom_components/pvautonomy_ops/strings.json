@@ -2,47 +2,277 @@
   "config": {
     "step": {
       "user": {
-        "title": "PVAutonomy Ops Setup",
-        "description": "Configure the PVAutonomy Operations integration for managing edge devices.",
+        "title": "PVAutonomy Setup",
+        "description": "Choose how to add your PVAutonomy device.",
+        "menu_options": {
+          "setup_new": "Set up new device (build + flash firmware)",
+          "adopt_existing": "Adopt running device (register only — no build/flash)"
+        }
+      },
+      "proxy": {
+        "title": "Build Proxy Connection",
+        "description": "Configure the PVAutonomy build proxy. Your API key authenticates firmware build requests.",
         "data": {
-          "name": "Integration name",
-          "poll_interval_sec": "Poll interval (seconds)"
+          "proxy_base_url": "Proxy URL",
+          "proxy_api_key": "API key"
         },
         "data_description": {
-          "name": "Display name for this integration instance.",
-          "poll_interval_sec": "How often to refresh device status (10-300 seconds)."
+          "proxy_base_url": "PVAutonomy build proxy endpoint.",
+          "proxy_api_key": "Your API key (starts with pva_). Obtain from your PVAutonomy provider."
+        }
+      },
+      "manufacturer": {
+        "title": "Select Manufacturer",
+        "description": "Choose the inverter manufacturer.",
+        "data": {
+          "manufacturer": "Manufacturer"
+        }
+      },
+      "model": {
+        "title": "Select Model",
+        "description": "Choose the inverter model.",
+        "data": {
+          "model_slug": "Model"
+        }
+      },
+      "location": {
+        "title": "Device Location",
+        "description": "Assign a location and device number. These identify the device in your installation.",
+        "data": {
+          "site_preset": "Location",
+          "site": "Custom site name",
+          "number": "Device number"
+        },
+        "data_description": {
+          "site_preset": "Choose a common location or select 'Custom' to enter your own.",
+          "site": "Custom location name (only when 'Custom' is selected). Minimum 2 characters.",
+          "number": "Device number at this site (1-10)."
+        }
+      },
+      "target_device": {
+        "title": "Select Target Device",
+        "description": "Choose the physical device (from Home Assistant) to bind to this configuration. Only ESPHome devices with a known MAC address are shown.",
+        "data": {
+          "ha_device_id": "Target device"
+        },
+        "data_description": {
+          "ha_device_id": "Select the ESPHome device to configure. Devices already bound to another PVAutonomy entry are not shown."
+        }
+      },
+      "confirm_relocate": {
+        "title": "Device Already Known",
+        "description": "This device is already registered as **{old_label}**.\n\nRelocate to **{new_label}**?",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "tier_selection": {
+        "title": "Select Feature Level",
+        "description": "Choose which features to enable on the device.\n\n**Standard** — Monitoring + APR power control (recommended for most users).\n**Extended** — Battery mode, export limit, and additional battery controls. Some advanced controls remain disabled by default in Home Assistant for safety until device validation is complete.",
+        "data": {
+          "selected_tier": "Feature level"
+        }
+      },
+      "tier_map_blocked": {
+        "title": "Feature Level Not Available",
+        "description": "You selected **{requested_tier}**, but the register map check returned contradictory results for this device.\n\nFor safety, only **Standard** (Monitoring + APR) is available until the register map can be verified.\n\nYou can continue with Standard or cancel the setup.",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "unsafe_consent": {
+        "title": "Expert mode — explicit consent required",
+        "description": "These settings can cause permanent device or battery damage if used incorrectly. Examples: inverter on/off, BMS unlock, password registers.\n\nTo continue:\n1) Tick the checkbox\n2) Enter exactly: **{consent_phrase}**\n\nBy proceeding, you accept full responsibility for any consequences.",
+        "data": {
+          "consent_checkbox": "I understand the risks of these expert settings",
+          "consent_phrase": "Confirmation phrase"
+        },
+        "data_description": {
+          "consent_phrase": "Enter exactly: {consent_phrase}"
+        }
+      },
+      "summary": {
+        "title": "Confirm Device Setup",
+        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nClick **Submit** to start building firmware."
+      },
+      "adopt_confirm": {
+        "title": "Adopt Running Device",
+        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nThis registers the already-running device in PVAutonomy. **No firmware is built, installed, or reflashed.** Click **Submit** to adopt."
+      },
+      "progress_build": {
+        "title": "Building Firmware",
+        "description": "Building firmware for **{device_name}**...\n\nThis usually takes 5–15 minutes. In some cases it may take longer. Please keep this window open and do not cancel the process.\n\nIf the connection is interrupted briefly, the build continues in the background."
+      },
+      "progress_flash": {
+        "title": "Flashing Device",
+        "description": "Flashing firmware to **{device_name}** ({device_ip})...\n\nPlease wait, this takes about 30 seconds."
+      },
+      "setup_complete": {
+        "title": "Setup Complete",
+        "description": "**{device_name}** — Firmware built and flashed successfully ({firmware_size} KB).\n\nFeature level: {selected_tier} | Build-ID: `{build_id_short}`\n\nThe device is rebooting and will be online shortly.\n\nClick **Submit** to finish."
+      },
+      "setup_complete_cached": {
+        "title": "Setup Complete",
+        "description": "**{device_name}** — Firmware loaded from cache and flashed successfully ({firmware_size} KB).\n\nFeature level: {selected_tier} | Build-ID: `{build_id_short}`\n\nThe firmware matches the current registry for this feature level — no rebuild needed.\n\nThe device is rebooting and will be online shortly.\n\nClick **Submit** to finish."
+      },
+      "setup_complete_partial": {
+        "title": "Firmware Built",
+        "description": "**{device_name}** — Firmware was built successfully but the device is currently offline.\n\nThe firmware is cached. You can flash it later using the **Flash** button in PVAutonomy settings.\n\nClick **Submit** to finish."
+      },
+      "error_build_failed": {
+        "title": "Build Failed",
+        "description": "Firmware build failed:\n\n`{error_message}`\n\nChoose an action:",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "error_flash_failed": {
+        "title": "Flash Failed",
+        "description": "OTA flash failed:\n\n`{error_message}`\n\nChoose an action:",
+        "data": {
+          "action": "Action"
         }
       }
     },
+    "progress": {
+      "building_firmware": "Building firmware for {device_name}... This usually takes 5–15 minutes.",
+      "flashing_device": "Flashing firmware to {device_name} ({device_ip})... Please wait."
+    },
+    "error": {
+      "proxy_unreachable": "Cannot reach build proxy. Check URL and API key.",
+      "proxy_too_old": "Build proxy does not support auto-identification (/whoami). Please update the proxy or contact support.",
+      "proxy_auth_failed": "API key rejected by proxy. Please check your API key.",
+      "site_too_short": "Site name must be at least 2 characters.",
+      "number_out_of_range": "Device number must be between 1 and 10.",
+      "no_device_selected": "Please select a target device.",
+      "device_not_found": "Selected device not found in Home Assistant.",
+      "missing_mac_identifier": "Selected device has no MAC address. Adopt the device in ESPHome first.",
+      "slug_immutable": "Device slug is fixed after first install. To change site or number, use the Relocate action in device options.",
+      "slug_already_in_use": "This device slug is already used by another configuration entry.",
+      "customer_id_missing": "Proxy customer_id could not be determined (whoami did not return one and no matching existing entry was found). Please verify your proxy API key, or set the customer_id in an existing PVAutonomy entry first."
+    },
     "abort": {
-      "already_configured": "PVAutonomy Ops is already configured."
+      "already_configured": "This device is already configured.",
+      "no_devices_found": "No ESPHome devices with MAC addresses found. Please adopt your Edge101 device in ESPHome first, then retry.",
+      "setup_cancelled": "Setup cancelled.",
+      "device_already_bound": "Device is already bound to another configuration."
+    }
+  },
+  "entity": {
+    "select": {
+      "target_device": {
+        "name": "Target device",
+        "state": {
+          "none": "No device selected"
+        }
+      }
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "PVAutonomy Ops Options",
-        "description": "Configure firmware artifacts, flash guards, and update behavior.",
+        "title": "PVAutonomy Options",
+        "description": "Choose an action.",
+        "menu_options": {
+          "settings": "Settings",
+          "relocate": "Relocate Device",
+          "cleanup_entities": "Clean Up Old Entities"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "description": "Configure proxy, build, and OTA settings.",
         "data": {
+          "selected_device": "Active device",
           "poll_interval_sec": "Poll interval (seconds)",
           "artifact_channel": "Firmware channel",
-          "artifact_hw_family_default": "Default hardware family",
-          "artifact_owner": "GitHub artifact owner",
-          "artifact_repo": "GitHub artifact repository",
-          "flash_min_firmware_size_kb": "Minimum firmware size (KB)",
-          "gates_freshness_minutes": "Gates freshness timeout (minutes)",
-          "strict_gates_required": "Require gates to pass before flash"
+          "proxy_base_url": "Proxy URL",
+          "proxy_api_key": "Proxy API key",
+          "proxy_customer_id": "Customer ID",
+          "proxy_auto_refresh_on_timeout": "Auto-refresh stale builds",
+          "ota_retries": "OTA flash retries",
+          "ota_retry_delays": "OTA retry delays (seconds)",
+          "cache_keep_builds": "Cached builds per device",
+          "build_backend": "Build backend",
+          "simulated_failure_mode": "Simulated failure mode"
         },
         "data_description": {
+          "selected_device": "Select the Edge101 device to manage.",
           "poll_interval_sec": "How often to refresh device status (10-300 seconds).",
           "artifact_channel": "Release channel: 'stable' for production, 'beta' for testing.",
-          "artifact_hw_family_default": "Default hardware family for firmware downloads.",
-          "artifact_owner": "GitHub organization or user owning the firmware repository.",
-          "artifact_repo": "GitHub repository name for firmware releases.",
-          "flash_min_firmware_size_kb": "Firmware files smaller than this are rejected (stub protection).",
-          "gates_freshness_minutes": "Maximum age of gate results before they expire (1-60 minutes).",
-          "strict_gates_required": "If enabled, flash is only allowed when gates pass and are fresh."
+          "proxy_base_url": "PVAutonomy build proxy endpoint.",
+          "proxy_api_key": "Your API key (starts with pva_). Obtain from your PVAutonomy provider.",
+          "proxy_customer_id": "Your customer identifier. Leave empty to auto-derive.",
+          "proxy_auto_refresh_on_timeout": "Automatically retry stale timeout/failed builds via proxy refresh.",
+          "ota_retries": "Number of OTA flash attempts (0 = no retry, 3 = default).",
+          "ota_retry_delays": "Comma-separated delay in seconds before each retry (e.g. '0,10,30').",
+          "cache_keep_builds": "Keep the last N firmware builds per device in cache.",
+          "build_backend": "How firmware is compiled: 'proxy_remote' for cloud builds, 'simulated' for testing.",
+          "simulated_failure_mode": "Inject failures for testing (only active when build backend is 'simulated')."
         }
+      },
+      "relocate": {
+        "title": "Relocate Device",
+        "description": "Change the site name and/or device number for this device.",
+        "data": {
+          "site": "New site name",
+          "number": "New device number"
+        },
+        "data_description": {
+          "site": "Location name (e.g. home, garage, barn). Minimum 2 characters.",
+          "number": "Device number at this site (1-10)."
+        }
+      },
+      "cleanup_entities": {
+        "title": "Clean Up Old Entities",
+        "description": "Checking for old entity prefixes on this device..."
+      },
+      "cleanup_no_split": {
+        "title": "No Cleanup Needed",
+        "description": "No old entity prefixes found for this device (current: `{current_prefix}`). Everything is clean."
+      },
+      "cleanup_review": {
+        "title": "Old Entities Found",
+        "description": "Found **{candidate_count}** entities with old prefixes.\n\nCurrent prefix: `{current_prefix}`\nOld prefixes: {old_prefixes}\n\nChoose an action for the old entities.",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "cleanup_confirm_delete": {
+        "title": "Confirm Deletion",
+        "description": "Deletion is **irreversible**. Type `DELETE` to confirm.",
+        "data": {
+          "confirm_phrase": "Confirmation"
+        },
+        "data_description": {
+          "confirm_phrase": "Type exactly: DELETE"
+        }
+      },
+      "cleanup_complete": {
+        "title": "Cleanup Complete",
+        "description": "Old prefixes: {old_prefixes}\n\n- Disabled: **{disabled}**\n- Deleted: **{deleted}**\n- Skipped (already disabled): **{skipped}**\n- Errors: **{errors}**\n\nCheck dashboards and automations for references to old entity IDs."
+      }
+    },
+    "error": {
+      "site_too_short": "Site name must be at least 2 characters.",
+      "number_out_of_range": "Device number must be between 1 and 10.",
+      "cleanup_phrase_mismatch": "Confirmation phrase must be exactly: DELETE"
+    },
+    "abort": {
+      "relocate_blocked": "Relocate is temporarily disabled. The current implementation cannot guarantee ESPHome encryption continuity — the device would appear as newly discovered without its encryption key, which is a security risk. This will be resolved in a future update."
+    }
+  },
+  "selector": {
+    "tier_option": {
+      "options": {
+        "standard": "Standard — Monitoring + APR",
+        "extended": "Extended — Battery mode, export limit, battery controls"
+      }
+    },
+    "tier_map_blocked_action": {
+      "options": {
+        "continue_standard": "Continue with Standard",
+        "cancel": "Cancel setup"
       }
     }
   }

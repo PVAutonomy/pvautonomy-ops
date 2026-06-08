@@ -1,6 +1,14 @@
-"""Firmware Artifact Management (Phase 3.3).
+"""Firmware Artifact Management — Factory Reset Path Only.
 
-Downloads and verifies prebuilt firmware artifacts from GitHub Releases.
+EPIC-015 P3-06: This module is the SOLE live caller for factory-reset firmware
+downloads.  The Flash button (push OTA) uses pipeline.py + build_backend.py
+instead.  Do NOT add new callers without reviewing the verification contract.
+
+Live consumer: lifecycle.py:factory_reset_device → download_artifact → verify_artifact
+Contract: caller MUST call verify_artifact() before OTA use (fail-closed).
+
+Also provides ESP-Web-Tools compatible manifest generation for Factory Managed Pull
+(factory_installer.py) and get_latest_version() for version resolution.
 """
 import asyncio
 import hashlib
@@ -216,7 +224,7 @@ async def verify_artifact(artifact: FirmwareArtifact) -> bool:
                 calculated
             )
             raise ArtifactError(
-                f"Firmware integrity check failed: SHA256 mismatch"
+                "Firmware integrity check failed: SHA256 mismatch"
             )
         
         _LOGGER.info("Firmware integrity verified: SHA256 OK")
@@ -245,3 +253,56 @@ def get_latest_version(hw_family: str, channel: str = "stable") -> str:
         "Using hardcoded firmware version (MVP) - TODO: implement GitHub API query"
     )
     return "1.0.4"  # TODO: Query GitHub Releases API
+
+
+def generate_esphome_manifest(
+    name: str,
+    version: str,
+    firmware_md5: str,
+    firmware_filename: str = "firmware.ota.bin",
+    chip_family: str = "ESP32",
+) -> dict[str, Any]:
+    """Generate ESP-Web-Tools compatible manifest for ESPHome managed updates.
+
+    ESPHome's `update: platform: http_request` requires this specific manifest
+    format (ESP-Web-Tools / Improv schema). It is different from PVAutonomy's
+    own push-OTA manifest (sha256/channel/hw_family).
+
+    Format:
+        {
+          "name": "PVAutonomy Edge101",
+          "version": "1.0.4",
+          "builds": [{
+            "chipFamily": "ESP32",
+            "ota": {
+              "md5": "<md5hex>",
+              "path": "firmware.ota.bin"
+            }
+          }]
+        }
+
+    Args:
+        name: Firmware display name
+        version: Firmware version string
+        firmware_md5: MD5 hex digest of the firmware.ota.bin file
+        firmware_filename: Filename of the OTA binary (relative to manifest URL)
+        chip_family: ESP chip family ("ESP32", "ESP32-S3", etc.)
+
+    Returns:
+        Dict ready for json.dumps()
+    """
+    manifest = {
+        "name": name,
+        "version": version,
+        "builds": [
+            {
+                "chipFamily": chip_family,
+                "ota": {
+                    "md5": firmware_md5,
+                    "path": firmware_filename,
+                },
+            }
+        ],
+    }
+    _LOGGER.debug("Generated ESP-Web-Tools manifest: %s", json.dumps(manifest))
+    return manifest

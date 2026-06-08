@@ -1,10 +1,10 @@
 {
   "domain": "pvautonomy_ops",
-  "name": "PVAutonomy Production Operations",
-  "version": "0.2.1",
+  "name": "PVAutonomy",
+  "version": "0.3.0",
   "documentation": "https://github.com/PVAutonomy/pvautonomy-ops",
   "issue_tracker": "https://github.com/PVAutonomy/pvautonomy-ops/issues",
-  "requirements": [],
+  "requirements": ["pyhpke==0.6.4"],
   "dependencies": [],
   "config_flow": true,
   "codeowners": ["@gshubi"],
