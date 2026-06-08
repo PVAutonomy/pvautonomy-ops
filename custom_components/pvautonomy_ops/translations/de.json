@@ -1,0 +1,279 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PVAutonomy Einrichtung",
+        "description": "Wählen Sie, wie Ihr PVAutonomy-Gerät hinzugefügt werden soll.",
+        "menu_options": {
+          "setup_new": "Neues Gerät einrichten (Firmware erstellen + flashen)",
+          "adopt_existing": "Laufendes Gerät übernehmen (nur registrieren — kein Build/Flash)"
+        }
+      },
+      "proxy": {
+        "title": "Build-Proxy-Verbindung",
+        "description": "PVAutonomy Build-Proxy konfigurieren. Ihr API-Schlüssel authentifiziert Firmware-Build-Anfragen.",
+        "data": {
+          "proxy_base_url": "Proxy-URL",
+          "proxy_api_key": "API-Schlüssel"
+        },
+        "data_description": {
+          "proxy_base_url": "PVAutonomy Build-Proxy-Endpunkt.",
+          "proxy_api_key": "Ihr API-Schlüssel (beginnt mit pva_). Erhalten Sie diesen von Ihrem PVAutonomy-Anbieter."
+        }
+      },
+      "manufacturer": {
+        "title": "Hersteller wählen",
+        "description": "Wählen Sie den Wechselrichter-Hersteller.",
+        "data": {
+          "manufacturer": "Hersteller"
+        }
+      },
+      "model": {
+        "title": "Modell wählen",
+        "description": "Wählen Sie das Wechselrichter-Modell.",
+        "data": {
+          "model_slug": "Modell"
+        }
+      },
+      "location": {
+        "title": "Geräte-Standort",
+        "description": "Weisen Sie einen Standort und eine Gerätenummer zu. Diese identifizieren das Gerät in Ihrer Installation.",
+        "data": {
+          "site_preset": "Standort",
+          "site": "Eigener Standortname",
+          "number": "Gerätenummer"
+        },
+        "data_description": {
+          "site_preset": "Wählen Sie einen gängigen Standort oder 'Custom' für eigene Eingabe.",
+          "site": "Eigener Standortname (nur bei 'Custom'). Mindestens 2 Zeichen.",
+          "number": "Gerätenummer an diesem Standort (1-10)."
+        }
+      },
+      "target_device": {
+        "title": "Zielgerät auswählen",
+        "description": "Wählen Sie das physische Gerät (aus Home Assistant) für diese Konfiguration. Nur ESPHome-Geräte mit bekannter MAC-Adresse werden angezeigt.",
+        "data": {
+          "ha_device_id": "Zielgerät"
+        },
+        "data_description": {
+          "ha_device_id": "ESPHome-Gerät auswählen. Geräte, die bereits einem anderen PVAutonomy-Eintrag zugewiesen sind, werden nicht angezeigt."
+        }
+      },
+      "confirm_relocate": {
+        "title": "Gerät bereits bekannt",
+        "description": "Dieses Gerät ist bereits als **{old_label}** registriert.\n\nUmziehen zu **{new_label}**?",
+        "data": {
+          "action": "Aktion"
+        }
+      },
+      "tier_selection": {
+        "title": "Funktionsumfang wählen",
+        "description": "Wählen Sie aus, welche Funktionen auf dem Gerät aktiviert werden sollen.\n\n**Standard** — Monitoring + APR-Leistungsregelung (empfohlen für die meisten Nutzer).\n**Erweitert** — Batteriemodus, Export-Limit und zusätzliche Batterie-Steuerungen. Einige erweiterte Steuerungen bleiben in Home Assistant aus Sicherheitsgründen standardmäßig deaktiviert, bis die Gerätevalidierung abgeschlossen ist.",
+        "data": {
+          "selected_tier": "Funktionsumfang"
+        }
+      },
+      "tier_map_blocked": {
+        "title": "Funktionsumfang nicht verfügbar",
+        "description": "Sie haben **{requested_tier}** gewählt, aber die Register-Map-Prüfung hat widersprüchliche Ergebnisse für dieses Gerät ergeben.\n\nAus Sicherheitsgründen ist nur **Standard** (Monitoring + APR) verfügbar, bis die Register-Map verifiziert werden kann.\n\nSie können mit Standard fortfahren oder die Einrichtung abbrechen.",
+        "data": {
+          "action": "Aktion"
+        }
+      },
+      "unsafe_consent": {
+        "title": "Expertenmodus – explizite Zustimmung erforderlich",
+        "description": "Diese Einstellungen können bei falscher Verwendung zu dauerhaften Schäden am Gerät oder an der Batterie führen. Beispiele: Wechselrichter Ein/Aus, BMS-Freischaltung, Passwort-Register.\n\nZum Fortfahren:\n1) Aktivieren Sie die Checkbox\n2) Geben Sie exakt ein: **{consent_phrase}**\n\nMit dem Fortfahren übernehmen Sie die volle Verantwortung für mögliche Folgen.",
+        "data": {
+          "consent_checkbox": "Ich habe die Warnung verstanden und übernehme die Verantwortung",
+          "consent_phrase": "Bestätigungsphrase"
+        },
+        "data_description": {
+          "consent_phrase": "Geben Sie exakt ein: {consent_phrase}"
+        }
+      },
+      "summary": {
+        "title": "Geräte-Einrichtung bestätigen",
+        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nKlicken Sie auf **Absenden**, um die Firmware-Erstellung zu starten."
+      },
+      "adopt_confirm": {
+        "title": "Laufendes Gerät übernehmen",
+        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nHiermit wird das bereits laufende Gerät in PVAutonomy registriert. **Es wird keine Firmware erstellt, installiert oder neu geflasht.** Klicken Sie auf **Senden**, um zu übernehmen."
+      },
+      "progress_build": {
+        "title": "Firmware wird erstellt",
+        "description": "Firmware für **{device_name}** wird erstellt...\n\nDies dauert in der Regel 5–15 Minuten. In Einzelfällen kann es länger dauern. Bitte lassen Sie dieses Fenster geöffnet und brechen Sie den Vorgang nicht ab.\n\nBei einer kurzzeitigen Verbindungsunterbrechung läuft die Erstellung im Hintergrund weiter."
+      },
+      "progress_flash": {
+        "title": "Gerät wird geflasht",
+        "description": "Firmware wird auf **{device_name}** ({device_ip}) übertragen...\n\nBitte warten, dies dauert ca. 30 Sekunden."
+      },
+      "setup_complete": {
+        "title": "Einrichtung abgeschlossen",
+        "description": "**{device_name}** — Firmware wurde erstellt und erfolgreich geflasht ({firmware_size} KB).\n\nFunktionsumfang: {selected_tier} | Build-ID: `{build_id_short}`\n\nDas Gerät startet neu und ist in Kürze online.\n\nKlicken Sie auf **Absenden**, um abzuschließen."
+      },
+      "setup_complete_cached": {
+        "title": "Einrichtung abgeschlossen",
+        "description": "**{device_name}** — Firmware aus dem Cache geladen und erfolgreich geflasht ({firmware_size} KB).\n\nFunktionsumfang: {selected_tier} | Build-ID: `{build_id_short}`\n\nDie Firmware entspricht exakt dem aktuellen Stand für diesen Funktionsumfang — kein Neubau erforderlich.\n\nDas Gerät startet neu und ist in Kürze online.\n\nKlicken Sie auf **Absenden**, um abzuschließen."
+      },
+      "setup_complete_partial": {
+        "title": "Firmware erstellt",
+        "description": "**{device_name}** — Firmware wurde erfolgreich erstellt, aber das Gerät ist derzeit offline.\n\nDie Firmware ist gespeichert. Sie können sie später über die **Flash**-Schaltfläche in den PVAutonomy-Einstellungen flashen.\n\nKlicken Sie auf **Absenden**, um abzuschließen."
+      },
+      "error_build_failed": {
+        "title": "Build fehlgeschlagen",
+        "description": "Firmware-Build fehlgeschlagen:\n\n`{error_message}`\n\nWählen Sie eine Aktion:",
+        "data": {
+          "action": "Aktion"
+        }
+      },
+      "error_flash_failed": {
+        "title": "Flash fehlgeschlagen",
+        "description": "OTA-Flash fehlgeschlagen:\n\n`{error_message}`\n\nWählen Sie eine Aktion:",
+        "data": {
+          "action": "Aktion"
+        }
+      }
+    },
+    "progress": {
+      "building_firmware": "Firmware für {device_name} wird erstellt... Dies dauert in der Regel 5–15 Minuten.",
+      "flashing_device": "Firmware wird auf {device_name} ({device_ip}) übertragen... Bitte warten."
+    },
+    "error": {
+      "proxy_unreachable": "Build-Proxy nicht erreichbar. URL und API-Schlüssel prüfen.",
+      "proxy_too_old": "Build-Proxy unterstützt keine Auto-Identifikation (/whoami). Bitte Proxy aktualisieren oder Support kontaktieren.",
+      "proxy_auth_failed": "API-Schlüssel vom Proxy abgelehnt. Bitte prüfen Sie Ihren API-Schlüssel.",
+      "site_too_short": "Standortname muss mindestens 2 Zeichen lang sein.",
+      "number_out_of_range": "Gerätenummer muss zwischen 1 und 10 liegen.",
+      "no_device_selected": "Bitte wählen Sie ein Zielgerät aus.",
+      "device_not_found": "Ausgewähltes Gerät nicht in Home Assistant gefunden.",
+      "missing_mac_identifier": "Ausgewähltes Gerät hat keine MAC-Adresse. Bitte das Gerät zuerst in ESPHome adoptieren.",
+      "slug_immutable": "Geräte-Slug ist nach der Erstinstallation unveränderlich. Für Standort- oder Nummernwechsel nutzen Sie die Umsetzen-Aktion in den Geräteoptionen.",
+      "slug_already_in_use": "Dieser Geräte-Slug wird bereits von einem anderen Konfigurationseintrag verwendet.",
+      "customer_id_missing": "Proxy customer_id konnte nicht ermittelt werden (whoami hat keine geliefert und kein passender vorhandener Eintrag wurde gefunden). Bitte API-Key prüfen oder customer_id in einem vorhandenen PVAutonomy-Eintrag setzen."
+    },
+    "abort": {
+      "already_configured": "Dieses Gerät ist bereits konfiguriert.",
+      "no_devices_found": "Keine ESPHome-Geräte mit MAC-Adressen gefunden. Bitte adoptieren Sie Ihr Edge101-Gerät zuerst in ESPHome und versuchen Sie es dann erneut.",
+      "setup_cancelled": "Einrichtung abgebrochen.",
+      "device_already_bound": "Gerät ist bereits einer anderen Konfiguration zugewiesen."
+    }
+  },
+  "entity": {
+    "select": {
+      "target_device": {
+        "name": "Zielgerät",
+        "state": {
+          "none": "Kein Gerät ausgewählt"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PVAutonomy Optionen",
+        "description": "Wählen Sie eine Aktion.",
+        "menu_options": {
+          "settings": "Einstellungen",
+          "relocate": "Gerät umsetzen",
+          "cleanup_entities": "Alte Entitäten bereinigen"
+        }
+      },
+      "settings": {
+        "title": "Einstellungen",
+        "description": "Proxy-, Build- und OTA-Einstellungen konfigurieren.",
+        "data": {
+          "selected_device": "Aktives Gerät",
+          "poll_interval_sec": "Abfrageintervall (Sekunden)",
+          "artifact_channel": "Firmware-Kanal",
+          "proxy_base_url": "Proxy-URL",
+          "proxy_api_key": "Proxy-API-Schlüssel",
+          "proxy_customer_id": "Kunden-ID",
+          "proxy_auto_refresh_on_timeout": "Veraltete Builds automatisch aktualisieren",
+          "ota_retries": "OTA-Flash-Wiederholungen",
+          "ota_retry_delays": "OTA-Wiederholungsverzögerung (Sekunden)",
+          "cache_keep_builds": "Gespeicherte Builds pro Gerät",
+          "build_backend": "Build-Backend",
+          "simulated_failure_mode": "Simulierter Fehlermodus"
+        },
+        "data_description": {
+          "selected_device": "Edge101-Gerät auswählen, das verwaltet werden soll.",
+          "poll_interval_sec": "Wie oft der Gerätestatus aktualisiert wird (10-300 Sekunden).",
+          "artifact_channel": "Release-Kanal: 'stable' für Produktion, 'beta' zum Testen.",
+          "proxy_base_url": "PVAutonomy Build-Proxy-Endpunkt.",
+          "proxy_api_key": "Ihr API-Schlüssel (beginnt mit pva_). Erhalten Sie diesen von Ihrem PVAutonomy-Anbieter.",
+          "proxy_customer_id": "Ihre Kundenkennung. Leer lassen für automatische Ableitung.",
+          "proxy_auto_refresh_on_timeout": "Veraltete Timeout-/Fehler-Builds automatisch per Proxy-Refresh korrigieren.",
+          "ota_retries": "Anzahl der OTA-Flash-Versuche (0 = kein Retry, 3 = Standard).",
+          "ota_retry_delays": "Kommagetrennte Verzögerung in Sekunden vor jedem Wiederholungsversuch (z.B. '0,10,30').",
+          "cache_keep_builds": "Die letzten N Firmware-Builds pro Gerät im Cache behalten.",
+          "build_backend": "Wie Firmware kompiliert wird: 'proxy_remote' für Cloud-Builds, 'simulated' zum Testen.",
+          "simulated_failure_mode": "Fehler zum Testen einschleusen (nur aktiv bei Build-Backend 'simulated')."
+        }
+      },
+      "relocate": {
+        "title": "Gerät umsetzen",
+        "description": "Standortname und/oder Gerätenummer für dieses Gerät ändern.",
+        "data": {
+          "site": "Neuer Standortname",
+          "number": "Neue Gerätenummer"
+        },
+        "data_description": {
+          "site": "Standortbezeichnung (z.B. home, garage, scheune). Mindestens 2 Zeichen.",
+          "number": "Gerätenummer an diesem Standort (1-10)."
+        }
+      },
+      "cleanup_entities": {
+        "title": "Alte Entitäten bereinigen",
+        "description": "Prüfe auf alte Entitäts-Präfixe für dieses Gerät..."
+      },
+      "cleanup_no_split": {
+        "title": "Keine Bereinigung nötig",
+        "description": "Keine alten Entitäts-Präfixe für dieses Gerät gefunden (aktuell: `{current_prefix}`). Alles sauber."
+      },
+      "cleanup_review": {
+        "title": "Alte Entitäten gefunden",
+        "description": "**{candidate_count}** Entitäten mit alten Präfixen gefunden.\n\nAktueller Präfix: `{current_prefix}`\nAlte Präfixe: {old_prefixes}\n\nWählen Sie eine Aktion für die alten Entitäten.",
+        "data": {
+          "action": "Aktion"
+        }
+      },
+      "cleanup_confirm_delete": {
+        "title": "Löschung bestätigen",
+        "description": "Die Löschung ist **unwiderruflich**. Geben Sie `DELETE` ein, um zu bestätigen.",
+        "data": {
+          "confirm_phrase": "Bestätigung"
+        },
+        "data_description": {
+          "confirm_phrase": "Geben Sie exakt ein: DELETE"
+        }
+      },
+      "cleanup_complete": {
+        "title": "Bereinigung abgeschlossen",
+        "description": "Alte Präfixe: {old_prefixes}\n\n- Deaktiviert: **{disabled}**\n- Gelöscht: **{deleted}**\n- Übersprungen (bereits deaktiviert): **{skipped}**\n- Fehler: **{errors}**\n\nPrüfen Sie Dashboards und Automationen auf Verweise auf alte Entity-IDs."
+      }
+    },
+    "error": {
+      "site_too_short": "Standortname muss mindestens 2 Zeichen lang sein.",
+      "number_out_of_range": "Gerätenummer muss zwischen 1 und 10 liegen.",
+      "cleanup_phrase_mismatch": "Bestätigungsphrase muss exakt lauten: DELETE"
+    },
+    "abort": {
+      "relocate_blocked": "Umsetzen ist vorübergehend deaktiviert. Die aktuelle Implementierung kann die ESPHome-Verschlüsselungskontinuität nicht garantieren — das Gerät würde ohne Verschlüsselungsschlüssel als neu erkannt, was ein Sicherheitsrisiko darstellt. Dies wird in einem künftigen Update behoben."
+    }
+  },
+  "selector": {
+    "tier_option": {
+      "options": {
+        "standard": "Standard — Monitoring + APR-Leistungsregelung",
+        "extended": "Erweitert — Batteriemodus, Export-Limit, Batterie-Steuerungen"
+      }
+    },
+    "tier_map_blocked_action": {
+      "options": {
+        "continue_standard": "Mit Standard fortfahren",
+        "cancel": "Einrichtung abbrechen"
+      }
+    }
+  }
+}

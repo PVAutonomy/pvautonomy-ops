@@ -15,8 +15,6 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_time_interval
-from datetime import timedelta
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,13 +104,15 @@ class OperationTracker:
     - last_error, last_error_time
     """
     
-    def __init__(self, hass: HomeAssistant):
+    def __init__(self, hass: HomeAssistant, entry_id: str | None = None):
         """Initialize operation tracker.
-        
+
         Args:
             hass: Home Assistant instance
+            entry_id: Config entry ID for multi-entry event scoping (EPIC-015 P3-05)
         """
         self.hass = hass
+        self._entry_id = entry_id
         self._state = OperationState.IDLE
         self._name: Optional[str] = None
         self._started: Optional[datetime] = None
@@ -140,7 +140,11 @@ class OperationTracker:
         _LOGGER.info("Operation started: %s", operation_name)
         self.hass.bus.async_fire(
             "pvautonomy_ops_operation_started",
-            {"operation": operation_name, "started": self._started.isoformat()}
+            {
+                "entry_id": self._entry_id,  # EPIC-015 P3-05
+                "operation": operation_name,
+                "started": self._started.isoformat(),
+            }
         )
     
     def update_progress(self, progress: int, message: Optional[str] = None):
@@ -159,7 +163,11 @@ class OperationTracker:
         
         self.hass.bus.async_fire(
             "pvautonomy_ops_operation_progress",
-            {"progress": self._progress, "message": message}
+            {
+                "entry_id": self._entry_id,  # EPIC-015 P3-05
+                "progress": self._progress,
+                "message": message,
+            }
         )
     
     def complete_operation(self, success: bool, error: Optional[str] = None):
@@ -187,11 +195,12 @@ class OperationTracker:
         self.hass.bus.async_fire(
             "pvautonomy_ops_operation_completed",
             {
+                "entry_id": self._entry_id,  # EPIC-015 P3-05
                 "operation": self._name,
                 "success": success,
                 "error": error,
                 "finished": self._finished.isoformat(),
-                "duration_ms": self.duration_ms
+                "duration_ms": self.duration_ms,
             }
         )
     

@@ -4,11 +4,10 @@ Validates production readiness via automated checks.
 """
 import logging
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
 from .discovery import ContractInputReader
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,7 +18,7 @@ class GateResult(TypedDict):
 
     gate_id: str
     gate_name: str
-    status: str  # 'pass' | 'warn' | 'fail'
+    status: str  # 'pass' | 'warn' | 'fail' | 'skip'
     evidence: str
     checked_at: str  # ISO 8601
 
@@ -46,8 +45,14 @@ class QualityGateChecker:
         self.hass = hass
         self.input_reader = input_reader
 
-    async def run_all_gates(self, target_device: str | None = None) -> GatesSummary:
+    async def run_all_gates(self, target_device: str | None = None, *, entry_id: str | None = None) -> GatesSummary:
         """Run all quality gates and return summary.
+
+        In Factory mode (active_device_kind == 'factory'), production-only gates
+        (GATE-002, GATE-003, GATE-004) are skipped and GATE-FACTORY-001 is run.
+        In Production mode, all standard gates run; GATE-FACTORY-001 is NOT evaluated.
+
+        D-OPS-FACTORY-TO-PRODUCTION-UI-001 / P3-9-001 C3
 
         Args:
             target_device: Optional device filter (not used in MVP gates)
@@ -57,36 +62,91 @@ class QualityGateChecker:
         """
         results: list[GateResult] = []
 
-        # GATE-001: Device Discovery (MUST)
-        results.append(await self._gate_001_device_discovery())
+        # Determine device kind (factory vs production)
+        # Entry-scoped: prevents cross-entry bleed when target_device is None
+        device_kind = await self.input_reader.get_selected_device_kind(
+            device_name=target_device, entry_id=entry_id
+        )
+        is_factory = device_kind == "factory"
 
-        # GATE-002: Health Indicators (MUST)
-        results.append(await self._gate_002_health_indicators())
+        if is_factory:
+            _LOGGER.info("Factory mode detected — running factory-aware gates")
 
-        # GATE-003: Entity Naming (MUST)
-        results.append(await self._gate_003_entity_naming())
+        # GATE-001: Device Discovery (MUST) — runs in both modes
+        results.append(await self._gate_001_device_discovery(entry_id=entry_id))
 
-        # GATE-004: Modbus Registers (SHOULD) - warn only for MVP
-        results.append(await self._gate_004_modbus_registers())
+        if is_factory:
+            # Factory mode: skip production-only gates, run factory readiness
+            now_str = datetime.now(timezone.utc).isoformat()
+            results.append({
+                "gate_id": "GATE-002",
+                "gate_name": "Health Indicators",
+                "status": "skip",
+                "evidence": "Skipped in Factory mode (no health sensors)",
+                "checked_at": now_str,
+            })
+            results.append({
+                "gate_id": "GATE-003",
+                "gate_name": "Entity Naming (I18N)",
+                "status": "skip",
+                "evidence": "Skipped in Factory mode (no production entities)",
+                "checked_at": now_str,
+            })
+            results.append({
+                "gate_id": "GATE-004",
+                "gate_name": "Modbus Registers",
+                "status": "skip",
+                "evidence": "Skipped in Factory mode (no Modbus)",
+                "checked_at": now_str,
+            })
+
+            # GATE-FACTORY-001: Factory Readiness
+            results.append(await self._gate_factory_001_readiness(target_device, entry_id=entry_id))
+        else:
+            # Production mode: standard gates
+            # GATE-002: Health Indicators (MUST)
+            results.append(await self._gate_002_health_indicators())
+
+            # GATE-003: Entity Naming (MUST)
+            results.append(await self._gate_003_entity_naming())
+
+            # GATE-004: Modbus Registers (SHOULD) - warn only for MVP
+            results.append(await self._gate_004_modbus_registers())
 
         # Build summary
         summary = self._build_summary(results)
         return summary
 
-    async def _gate_001_device_discovery(self) -> GateResult:
+    async def _gate_001_device_discovery(self, *, entry_id: str | None = None) -> GateResult:
         """GATE-001: Validate device discovery works.
 
         Requirements:
-        - sensor.edge101_production_devices exists
-        - devices list not empty
-        - discovery_method valid
+        - At least one Edge101 device discoverable
+        - Uses Device Registry (P3-8-001) first, falls back to legacy sensor
         """
         gate_id = "GATE-001"
         gate_name = "Device Discovery"
 
         try:
+            # P3-11-001: Try Device Registry first (works for factory + production)
+            registry_result = await self.input_reader.get_registry_devices()
+            factory_devices = registry_result.get("factory", [])
+            production_devices = registry_result.get("production", [])
+            total_registry = len(factory_devices) + len(production_devices)
+
+            if total_registry > 0:
+                names = [d.get("name", "?") for d in factory_devices + production_devices]
+                return {
+                    "gate_id": gate_id,
+                    "gate_name": gate_name,
+                    "status": "pass",
+                    "evidence": f"{total_registry} device(s) via registry: {', '.join(names)}",
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            # Fallback: legacy sensor (Contract Input A)
             devices = await self.input_reader.get_discovered_devices()
-            validation = await self.input_reader.validate_inputs()
+            validation = await self.input_reader.validate_inputs(entry_id=entry_id)
 
             if not validation.get("valid", False):
                 missing = validation.get("missing_inputs", [])
@@ -103,7 +163,7 @@ class QualityGateChecker:
                     "gate_id": gate_id,
                     "gate_name": gate_name,
                     "status": "warn",
-                    "evidence": "No devices discovered (empty list)",
+                    "evidence": "No devices discovered (registry empty, legacy sensor empty)",
                     "checked_at": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -127,22 +187,29 @@ class QualityGateChecker:
     async def _gate_002_health_indicators(self) -> GateResult:
         """GATE-002: Validate health indicators for all devices.
 
+        EPIC-005-A1 / PN-1: capability-based health via Entity Registry
+        (device_class + state_class). Falls back to legacy template sensor.
+
         Requirements:
-        - All devices have binary_sensor.{device}_health
-        - At least one device online (state=False means healthy)
+        - All production devices have health data (legacy or capability-based)
+        - At least one device healthy (state=False means healthy)
         """
         gate_id = "GATE-002"
         gate_name = "Health Indicators"
 
         try:
-            devices = await self.input_reader.get_discovered_devices()
+            from .discovery import DEVICE_KIND_PRODUCTION
 
-            if len(devices) == 0:
+            all_devices = await self.input_reader.get_all_discovered_devices()
+            # Only check production devices for health
+            prod_devices = [d for d in all_devices if d.state == DEVICE_KIND_PRODUCTION]
+
+            if len(prod_devices) == 0:
                 return {
                     "gate_id": gate_id,
                     "gate_name": gate_name,
                     "status": "warn",
-                    "evidence": "No devices to check health",
+                    "evidence": "No production devices to check health",
                     "checked_at": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -150,11 +217,18 @@ class QualityGateChecker:
             devices_unhealthy = 0
             missing_health = []
 
-            for device in devices:
-                health = await self.input_reader.get_device_health(device)
+            for dev in prod_devices:
+                # Try legacy first (get_device_health falls back to compute_device_health)
+                health = await self.input_reader.get_device_health(dev.name)
+
+                _LOGGER.debug(
+                    "GATE-002: device=%s available=%s state=%s missing=%s",
+                    dev.name, health.get("available"), health.get("state"),
+                    health.get("missing_sensors", []),
+                )
 
                 if not health.get("available", False):
-                    missing_health.append(device)
+                    missing_health.append(dev.name)
                     continue
 
                 # Contract: state=False means healthy (no problem)
@@ -168,7 +242,7 @@ class QualityGateChecker:
                     "gate_id": gate_id,
                     "gate_name": gate_name,
                     "status": "fail",
-                    "evidence": f"Missing health sensors: {', '.join(missing_health)}",
+                    "evidence": f"Missing health data: {', '.join(missing_health)}",
                     "checked_at": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -218,9 +292,11 @@ class QualityGateChecker:
         gate_name = "Entity Naming (I18N)"
 
         try:
-            # Load legacy allowlist
-            legacy_allowlist = self._load_legacy_allowlist()
-            devices = await self.input_reader.get_discovered_devices()
+            # Load legacy allowlist (async — HA 2026.2 blocks open() in event loop)
+            legacy_allowlist = await self._load_legacy_allowlist()
+            # EPIC-005-A1: use unified discovery
+            all_devices = await self.input_reader.get_all_discovered_devices()
+            devices = [d.name for d in all_devices]
 
             violations = []
             warnings = []
@@ -285,7 +361,11 @@ class QualityGateChecker:
         gate_name = "Modbus Registers"
 
         try:
-            devices = await self.input_reader.get_discovered_devices()
+            from .discovery import DEVICE_KIND_PRODUCTION
+
+            # EPIC-005-A1: use unified discovery, only check production devices
+            all_devices = await self.input_reader.get_all_discovered_devices()
+            devices = [d.name for d in all_devices if d.state == DEVICE_KIND_PRODUCTION]
 
             if len(devices) == 0:
                 return {
@@ -337,8 +417,11 @@ class QualityGateChecker:
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
 
-    def _load_legacy_allowlist(self) -> list[str]:
+    async def _load_legacy_allowlist(self) -> list[str]:
         """Load legacy device allowlist from data file.
+
+        HA 2026.2: blocking open() in event loop raises RuntimeError.
+        File I/O moved to executor thread.
 
         Returns:
             List of grandfathered device names (e.g., ['sph10k_haus_03'])
@@ -355,9 +438,12 @@ class QualityGateChecker:
                 _LOGGER.warning("Legacy allowlist not found: %s", allowlist_path)
                 return []
 
-            with open(allowlist_path, "r") as f:
-                data = json.load(f)
-                return data.get("legacy_device_names", [])
+            def _read() -> list[str]:
+                with open(allowlist_path, "r") as f:
+                    data = json.load(f)
+                    return data.get("legacy_device_names", [])
+
+            return await self.hass.async_add_executor_job(_read)
 
         except Exception as e:
             _LOGGER.error("Failed to load legacy allowlist: %s", e)
@@ -393,8 +479,103 @@ class QualityGateChecker:
 
         return False
 
+    async def _gate_factory_001_readiness(
+        self, target_device: str | None = None, *, entry_id: str | None = None
+    ) -> GateResult:
+        """GATE-FACTORY-001: Validate factory device is online and reachable.
+
+        Pre-flight only checks device connectivity.  Model/location/number
+        are validated later in the SETUP_CONFIGURE stage of the wizard.
+
+        Requirements (all must pass):
+        - A factory device is selected
+        - Factory device has at least one entity with a non-unavailable state
+          (proves the ESPHome connection is live)
+
+        D-OPS-FACTORY-TO-PRODUCTION-UI-001 §5
+        """
+        gate_id = "GATE-FACTORY-001"
+        gate_name = "Factory Readiness"
+
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            missing: list[str] = []
+
+            # Check 1: Factory device selected
+            # Entry-scoped: prevents cross-entry bleed (P0 fix)
+            selected = target_device or await self.input_reader.get_selected_device(entry_id=entry_id)
+            if not selected:
+                missing.append("No device selected")
+                return {
+                    "gate_id": gate_id,
+                    "gate_name": gate_name,
+                    "status": "fail",
+                    "evidence": f"Missing: {'; '.join(missing)}",
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            # Check 2: Resolve HA device ID and verify at least one entity is online
+            registry_devices = await self.input_reader.get_registry_devices()
+            ha_device_id = None
+            for dev in registry_devices.get("factory", []):
+                if dev["name"] == selected:
+                    ha_device_id = dev["id"]
+                    break
+
+            if not ha_device_id:
+                missing.append(f"Device '{selected}' not found in factory registry")
+            else:
+                # Find entities belonging to this device and check if any are online
+                ent_reg = er.async_get(self.hass)
+                device_entities = er.async_entries_for_device(ent_reg, ha_device_id)
+
+                if not device_entities:
+                    missing.append(f"No entities found for device '{selected}'")
+                else:
+                    has_online = False
+                    for entry in device_entities:
+                        state = self.hass.states.get(entry.entity_id)
+                        if state is not None and state.state not in ("unavailable", "unknown"):
+                            has_online = True
+                            break
+
+                    if not has_online:
+                        missing.append(
+                            f"Factory device offline — all {len(device_entities)} "
+                            f"entities are unavailable"
+                        )
+
+            if len(missing) == 0:
+                return {
+                    "gate_id": gate_id,
+                    "gate_name": gate_name,
+                    "status": "pass",
+                    "evidence": f"Factory device '{selected}' is online and reachable",
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            return {
+                "gate_id": gate_id,
+                "gate_name": gate_name,
+                "status": "fail",
+                "evidence": f"Missing: {'; '.join(missing)}",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        except Exception as e:
+            return {
+                "gate_id": gate_id,
+                "gate_name": gate_name,
+                "status": "fail",
+                "evidence": f"Exception: {str(e)}",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+
     def _build_summary(self, results: list[GateResult]) -> GatesSummary:
         """Build gates summary from individual results.
+
+        Skipped gates (status='skip') do NOT count as failures.
 
         Args:
             results: List of gate check results
@@ -405,6 +586,7 @@ class QualityGateChecker:
         passed_gates = []
         warned_gates = []
         failed_gates = []
+        skipped_gates = []
         details = {}
 
         for result in results:
@@ -419,8 +601,10 @@ class QualityGateChecker:
                 warned_gates.append(gate_id)
             elif status == "fail":
                 failed_gates.append(gate_id)
+            elif status == "skip":
+                skipped_gates.append(gate_id)
 
-        # Determine overall status
+        # Determine overall status (skipped gates don't affect outcome)
         overall = "pass"
         if len(failed_gates) > 0:
             overall = "fail"
