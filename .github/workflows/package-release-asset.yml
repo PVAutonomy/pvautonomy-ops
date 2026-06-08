@@ -1,0 +1,96 @@
+name: Package integration release asset
+
+# Builds a deterministic, checksummed ZIP of the pvautonomy_ops integration and
+# attaches it to the matching GitHub Release, so the PVAutonomy Installer / Updater
+# add-on (repo: PVAutonomy/pvautonomy-addons) can download + verify it without HACS.
+#
+# Produces, for tag vX.Y.Z:
+#   pvautonomy_ops-X.Y.Z.zip          (contains custom_components/pvautonomy_ops/...)
+#   pvautonomy_ops-X.Y.Z.zip.sha256
+# Deterministic download URL (no redirect):
+#   https://github.com/PVAutonomy/pvautonomy-ops/releases/download/vX.Y.Z/pvautonomy_ops-X.Y.Z.zip
+#
+# Triggers:
+#   - release: published   -> packages the released tag automatically
+#   - workflow_dispatch     -> packages an explicit tag (e.g. to backfill v0.4.0)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package (e.g. v0.4.0). Required for manual runs."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag and version
+        id: resolve
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$EVENT_TAG}"
+          if [ -z "$tag" ]; then
+            echo "::error::No tag to package (provide the 'tag' input for manual runs)."
+            exit 1
+          fi
+          version="${tag#v}"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$tag version=$version"
+
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.tag }}
+
+      - name: Verify manifest.version matches the tag
+        run: |
+          set -euo pipefail
+          manifest="custom_components/pvautonomy_ops/manifest.json"
+          [ -f "$manifest" ] || { echo "::error::missing $manifest"; exit 1; }
+          mver="$(jq -r '.version' "$manifest")"
+          want="${{ steps.resolve.outputs.version }}"
+          if [ "$mver" != "$want" ]; then
+            echo "::error::manifest.version ($mver) != tag version ($want)"
+            exit 1
+          fi
+          echo "manifest.version=$mver matches tag."
+
+      - name: Build ZIP + SHA-256
+        run: |
+          set -euo pipefail
+          version="${{ steps.resolve.outputs.version }}"
+          zip="pvautonomy_ops-${version}.zip"
+          # Ship the integration directory exactly as HACS would install it.
+          # Defensively strip compiled caches (never present in a clean checkout).
+          zip -r -q "$zip" custom_components/pvautonomy_ops -x '*/__pycache__/*'
+          sha256sum "$zip" > "$zip.sha256"
+          echo "Built $zip"
+          cat "$zip.sha256"
+          echo "--- contents (head) ---"
+          unzip -l "$zip" | sed -n '1,8p'
+
+      - name: Upload assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.resolve.outputs.tag }}"
+          version="${{ steps.resolve.outputs.version }}"
+          gh release upload "$tag" \
+            "pvautonomy_ops-${version}.zip" \
+            "pvautonomy_ops-${version}.zip.sha256" \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+          echo "Uploaded assets to release $tag."
