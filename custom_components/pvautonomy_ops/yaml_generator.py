@@ -553,6 +553,12 @@ def _add_registers(
             yaml_key = "unit_of_measurement" if key == "unit" else key
             if s.get(key):
                 sensor[yaml_key] = s[key]
+        # [P1g] Propagate display precision so HA renders sub-unit values at the
+        # intended resolution instead of the integer default. The MIC600 Iac1
+        # current (scale 0.1) otherwise rounds 0.3 A → "0 A". `is not None` so an
+        # explicit accuracy_decimals of 0 is honored too (0 is falsy).
+        if s.get("accuracy_decimals") is not None:
+            sensor["accuracy_decimals"] = s["accuracy_decimals"]
         _apply_disabled_by_default(sensor, s)
         scale = s.get("scale", 1)
         if scale != 1:

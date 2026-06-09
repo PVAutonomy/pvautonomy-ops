@@ -1050,6 +1050,18 @@ def build_cards(
                 cards.append(status_card)
             continue
 
+        if title == "Status" and not has_battery:
+            # [P1g] MIC (non-battery) Status as a customer-readable markdown
+            # card: Inverter Status mapped 0/1/3 -> Standby/Normal/Fault (the raw
+            # number "1.0" is never shown), Inverter Temperature with °C. Driven
+            # by the surfaced rows (_MIC_STATUS_SURFACE) so absent entities yield
+            # no line. AC Current precision is fixed at the registry/generator
+            # metadata layer (accuracy_decimals), not here.
+            status_card = _build_mic_status_card(list(merged.get("Status", [])))
+            if status_card:
+                cards.append(status_card)
+            continue
+
         if title == "Control":
             entities = list(merged.get(title, []))
             if not entities:
@@ -1345,6 +1357,86 @@ def _build_sph_status_card(
     if not rows:
         return None
     return _make_entities_card("Status", rows)
+
+
+# [P1g 2026-06-09] MIC600 inverter_status raw value -> customer-readable label.
+# Source of truth: Growatt MIC600 Modbus protocol v3.14 §4.2, Input Reg 00
+# (Inverter run state): 0 = waiting, 1 = normal, 3 = fault.
+_MIC_STATUS_LABELS: dict[int, str] = {0: "Standby", 1: "Normal", 3: "Fault"}
+
+
+def _mic_inverter_status_label(state: Any) -> str:
+    """Map the MIC600 ``inverter_status`` raw value to a customer label.
+
+    The firmware sensor publishes the bare number (e.g. ``1.0``); the customer
+    dashboard shows ``Normal`` instead. ``0 -> Standby``, ``1 -> Normal``,
+    ``3 -> Fault`` (per :data:`_MIC_STATUS_LABELS`). Anything else degrades to a
+    safe ``Unknown`` (``unknown``/``unavailable``/missing) or ``Unknown (<raw>)``
+    for an unexpected number. Pure + never raises; the Status-card markdown
+    renders the equivalent mapping via Jinja so the displayed text matches.
+    """
+    if state is None:
+        return "Unknown"
+    raw = str(state).strip()
+    if raw.lower() in ("", "unknown", "unavailable", "none"):
+        return "Unknown"
+    try:
+        num = float(raw)
+    except (TypeError, ValueError):
+        return f"Unknown ({raw})"
+    label = _MIC_STATUS_LABELS.get(num)  # 0.0 == 0, 1.0 == 1, 3.0 == 3
+    return label if label is not None else f"Unknown ({raw})"
+
+
+def _build_mic_status_card(
+    rows: list[tuple[str, str]],
+) -> dict[str, Any] | None:
+    """Build the MIC (non-battery) Status card as customer-readable markdown.
+
+    [P1g] One bold-labelled line per surfaced row:
+      * ``inverter_status`` -> Standby/Normal/Fault via a Jinja mapping that
+        mirrors :func:`_mic_inverter_status_label` (raw numbers like ``1.0`` are
+        never shown; unexpected/unknown -> ``Unknown``/``Unknown (<raw>)``).
+      * ``inverter_temperature`` -> ``<value> °C`` (``Unknown`` when missing).
+      * any other surfaced row -> its raw state, gracefully.
+    Markdown never produces a broken "Entität nicht gefunden" row, and only the
+    surfaced entities are referenced (absent ids produce no line). Returns
+    ``None`` when there are no rows.
+    """
+    if not rows:
+        return None
+    lines: list[str] = []
+    for eid, label in rows:
+        if eid.endswith("_inverter_status_device"):
+            lines.append(
+                f"**{label}:** "
+                f"{{% set raw = states('{eid}') %}}"
+                f"{{% set n = raw | float(none) %}}"
+                f"{{% if n == 0 %}}Standby"
+                f"{{% elif n == 1 %}}Normal"
+                f"{{% elif n == 3 %}}Fault"
+                f"{{% elif raw in ['unknown', 'unavailable', '', none] %}}Unknown"
+                f"{{% else %}}Unknown ({{{{ raw }}}}){{% endif %}}"
+            )
+        elif eid.endswith("_inverter_temperature_device"):
+            lines.append(
+                f"**{label}:** "
+                f"{{% set t = states('{eid}') %}}"
+                f"{{% if t in ['unknown', 'unavailable', '', none] %}}Unknown"
+                f"{{% else %}}{{{{ t }}}} °C{{% endif %}}"
+            )
+        else:
+            lines.append(
+                f"**{label}:** "
+                f"{{% set v = states('{eid}') %}}"
+                f"{{% if v in ['unknown', 'unavailable', '', none] %}}Unknown"
+                f"{{% else %}}{{{{ v }}}}{{% endif %}}"
+            )
+    return {
+        "type": "markdown",
+        "title": "Status",
+        "content": "\n\n".join(lines),
+    }
 
 
 # [fix/sph-export-limit-no-switch-surface] Export Limit is READ-ONLY and rendered
