@@ -494,10 +494,13 @@ def _resolve_bridge_diagnostic_entity_id(
       3. The synthetic ``sensor.{device_name}_{sensor_key}_device`` when live.
       4. ``None`` — caller MUST skip the row.
 
-    When ``live_entity_ids`` is ``None`` (unit tests / fresh install before
-    discovery), fall back to the deterministic bridge name when ``mac_suffix``
-    is given, or the synthetic name otherwise. The legacy ``existing_entity_ids``
-    keyword is still accepted for backward compatibility and treated as live.
+    When ``live_entity_ids`` is ``None`` (no runtime snapshot could be captured
+    — e.g. ``hass.states`` was unreadable at build time), return ``None`` so the
+    caller omits the row. Optional bridge diagnostics are NEVER synthesized from
+    ``mac_suffix`` or the device name alone: a guessed entity ID would render as
+    an "Entität nicht gefunden" phantom row on the customer dashboard. The legacy
+    ``existing_entity_ids`` keyword is still accepted for backward compatibility
+    and treated as live.
     """
     synthetic = f"sensor.{device_name}_{sensor_key}_device"
     # Backward compat: accept either argument name; live_entity_ids wins.
@@ -522,11 +525,12 @@ def _resolve_bridge_diagnostic_entity_id(
             return synthetic
         return None
 
-    # No live state available (tests / fresh install): best-effort guess.
-    if mac_suffix:
-        suffix = mac_suffix.replace(":", "").lower()
-        return f"sensor.pvautonomy_modbus_bridge_{suffix}_{sensor_key}"
-    return synthetic
+    # Unknown live snapshot (``live_entity_ids is None``): we cannot confirm the
+    # optional bridge diagnostic actually exists, so omit the row rather than
+    # emit a guess that would render as an "Entität nicht gefunden" phantom on
+    # the customer dashboard. Optional bridge diagnostics (WiFi Signal / Uptime)
+    # are never synthesized.
+    return None
 
 
 def _resolve_wifi_signal_entity_id(
