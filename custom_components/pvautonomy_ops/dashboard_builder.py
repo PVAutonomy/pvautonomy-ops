@@ -151,6 +151,29 @@ FALLBACK_PREFIX_MAP: dict[str, str] = {
 }
 
 
+# [P1f MIC-Dashboard 2026-06-09] MIC600 (non-battery) Status / Control surface.
+#
+# The MIC600 registry tags `inverter_status` / `inverter_temperature` as
+# `diagnostic` and `active_power_rate` as `config`, and `_classify_entity`
+# drops every diagnostic/config row — so these three customer-facing entities
+# never reach the MIC dashboard. This allow-list promotes EXACTLY these
+# registry IDs into the Status and Control cards for non-battery (MIC-style)
+# builds WITHOUT changing the registry or the generated-firmware
+# `entity_category` (no new entities, no generator/firmware change). The
+# remaining diagnostic/config rows — `dc_bus_voltage`, `modbus_version`,
+# `modbus_unlock`, `save_modbus_write` — are deliberately NOT listed and stay
+# excluded. Each tuple is (registry_id, ha_domain); a row is surfaced only
+# when that id actually exists in the registry, so a model lacking the entity
+# yields no "Entität nicht gefunden" phantom row.
+_MIC_STATUS_SURFACE: tuple[tuple[str, str], ...] = (
+    ("inverter_status", "sensor"),
+    ("inverter_temperature", "sensor"),
+)
+_MIC_CONTROL_SURFACE: tuple[tuple[str, str], ...] = (
+    ("active_power_rate", "number"),
+)
+
+
 def _classify_entity(entry: dict[str, Any], bucket: str) -> str | None:
     """Classify a registry entry into a dashboard group.
 
@@ -773,6 +796,45 @@ def load_registry(registry_file: str) -> dict[str, Any]:
         return json.load(f)
 
 
+def _mic_surface_rows(
+    device_name: str,
+    registers: dict[str, Any],
+    surface: tuple[tuple[str, str], ...],
+) -> list[tuple[str, str]]:
+    """Resolve an explicit MIC allow-list to ``(entity_id, label)`` rows.
+
+    ``surface`` is a tuple of ``(registry_id, ha_domain)`` pairs (see
+    :data:`_MIC_STATUS_SURFACE` / :data:`_MIC_CONTROL_SURFACE`). A row is
+    emitted only when the id exists in the matching registry bucket and is not
+    ``unsafe``-tier. Unlike :func:`_classify_entity`, this intentionally
+    ignores ``entity_category``: it is the curated promotion path for the
+    MIC600 status/control entities the generic classifier drops as
+    diagnostic/config. Ids absent from the registry yield no row, so the
+    dashboard never shows an "Entität nicht gefunden" phantom.
+    """
+    bucket_by_domain = {
+        "sensor": "sensors",
+        "number": "numbers",
+        "switch": "switches",
+        "select": "selects",
+    }
+    rows: list[tuple[str, str]] = []
+    for reg_id, domain in surface:
+        bucket = bucket_by_domain.get(domain)
+        if bucket is None:
+            continue
+        for entry in registers.get(bucket, []):
+            if entry.get("id") != reg_id:
+                continue
+            if entry.get("tier") == "unsafe":
+                break
+            rows.append(
+                (f"{domain}.{device_name}_{reg_id}_device", _display_label(entry))
+            )
+            break
+    return rows
+
+
 def build_cards(
     device_name: str,
     registry: dict[str, Any],
@@ -865,6 +927,27 @@ def build_cards(
     for key, entities in groups.items():
         title = GROUP_TITLES.get(key, key.title())
         merged.setdefault(title, []).extend(entities)
+
+    # ── MIC surface layer (P1f 2026-06-09) ────────────────────────────
+    # Non-battery (MIC600-style) builds promote the customer-facing Status
+    # (Inverter Status, Inverter Temperature) and Control (Active Power Rate)
+    # rows that the registry tags diagnostic/config — see _MIC_STATUS_SURFACE /
+    # _MIC_CONTROL_SURFACE. SPH (has_battery) uses its own hybrid Status/Control
+    # builders below and is unaffected. Raw/technical rows (modbus_unlock,
+    # save_modbus_write, dc_bus_voltage, modbus_version) are not allow-listed
+    # and remain excluded. The "Status"/"Control" cards then render through the
+    # existing title loop (generic entities card / _build_sph_control_card).
+    if not has_battery:
+        for card_title, surface in (
+            ("Status", _MIC_STATUS_SURFACE),
+            ("Control", _MIC_CONTROL_SURFACE),
+        ):
+            target = merged.setdefault(card_title, [])
+            present = {eid for eid, _ in target}
+            for eid, label in _mic_surface_rows(device_name, registers, surface):
+                if eid not in present:
+                    target.append((eid, label))
+                    present.add(eid)
 
     # ── SPH hybrid layer (TASK-014M) ──────────────────────────────────
     # Battery card: pin to (SoC, Charging Power, Discharging Power,
