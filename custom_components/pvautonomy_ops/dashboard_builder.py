@@ -1397,7 +1397,8 @@ def _build_mic_status_card(
       * ``inverter_status`` -> Standby/Normal/Fault via a Jinja mapping that
         mirrors :func:`_mic_inverter_status_label` (raw numbers like ``1.0`` are
         never shown; unexpected/unknown -> ``Unknown``/``Unknown (<raw>)``).
-      * ``inverter_temperature`` -> ``<value> °C`` (``Unknown`` when missing).
+      * ``inverter_temperature`` -> ``<value> °C`` rounded to one decimal
+        ([P1h]: never a raw long float; ``Unknown`` when missing).
       * any other surfaced row -> its raw state, gracefully.
     Markdown never produces a broken "Entität nicht gefunden" row, and only the
     surfaced entities are referenced (absent ids produce no line). Returns
@@ -1419,11 +1420,15 @@ def _build_mic_status_card(
                 f"{{% else %}}Unknown ({{{{ raw }}}}){{% endif %}}"
             )
         elif eid.endswith("_inverter_temperature_device"):
+            # [P1h] Format to one decimal so the raw float32 register value
+            # (e.g. 33.4000015258789) renders as a clean "33.4 °C" — never a
+            # long float. `float(none)` collapses unknown/unavailable/missing
+            # (any non-numeric state) to "Unknown".
             lines.append(
                 f"**{label}:** "
-                f"{{% set t = states('{eid}') %}}"
-                f"{{% if t in ['unknown', 'unavailable', '', none] %}}Unknown"
-                f"{{% else %}}{{{{ t }}}} °C{{% endif %}}"
+                f"{{% set t = states('{eid}') | float(none) %}}"
+                f"{{% if t is none %}}Unknown"
+                f"{{% else %}}{{{{ t | round(1) }}}} °C{{% endif %}}"
             )
         else:
             lines.append(
