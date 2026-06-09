@@ -1140,6 +1140,32 @@ def build_cards(
                     existing_entity_ids=existing_entity_ids,
                 )
             ]
+            # [P1i] MIC (non-battery): pull AC Current (Iac1) into a one-decimal
+            # markdown row — HA's entities card does not reliably honor sub-amp
+            # display precision, so the live MIC600 renders 0.3 A as "0 A".
+            # Frequency / Power / Voltage stay native entity rows; the two
+            # render together in one "AC Output" vertical-stack. SPH is skipped
+            # (has_battery) and uses `*_ac_current_l1_device`, not the MIC
+            # `*_ac_current_device` suffix matched here.
+            if not has_battery and any(
+                eid.endswith("_ac_current_device") for eid, _ in entities
+            ):
+                ac_current = next(
+                    (e, lbl) for e, lbl in entities
+                    if e.endswith("_ac_current_device")
+                )
+                rest = [
+                    (e, lbl) for e, lbl in entities
+                    if not e.endswith("_ac_current_device")
+                ]
+                stack = []
+                if rest:
+                    stack.append(_make_entities_card("AC Output", rest))
+                stack.append(_build_mic_ac_current_card(*ac_current))
+                cards.append(
+                    _make_vertical_stack(stack) if len(stack) > 1 else stack[0]
+                )
+                continue
 
         if not entities:
             continue
@@ -1441,6 +1467,29 @@ def _build_mic_status_card(
         "type": "markdown",
         "title": "Status",
         "content": "\n\n".join(lines),
+    }
+
+
+def _build_mic_ac_current_card(eid: str, label: str) -> dict[str, Any]:
+    """Render MIC AC Current as a one-decimal markdown line.
+
+    [P1i] HA's core entities card does not reliably honor sub-amp display
+    precision, so on a live MIC600 the customer-visible Iac1 (e.g. 0.3 A)
+    renders as "0 A". This markdown reads the actual entity state and formats
+    it to one decimal — `{{ states(...) | round(1) }} A` — so sub-amp currents
+    stay visible (0 -> ``0.0 A``); non-numeric states (unknown/unavailable/
+    missing) degrade to ``Unknown``. The entity state itself is unchanged
+    (the registry/generator already scale Iac1 by 0.1); only the dashboard
+    presentation is corrected, with no firmware/registry change.
+    """
+    return {
+        "type": "markdown",
+        "content": (
+            f"**{label}:** "
+            f"{{% set v = states('{eid}') | float(none) %}}"
+            f"{{% if v is none %}}Unknown"
+            f"{{% else %}}{{{{ v | round(1) }}}} A{{% endif %}}"
+        ),
     }
 
 
