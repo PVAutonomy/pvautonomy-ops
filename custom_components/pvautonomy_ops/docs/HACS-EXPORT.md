@@ -23,9 +23,20 @@ reaches `pvautonomy-ops` via this gate and a HACS release.
 - **Hard block (fail-closed in `--apply`):** `.storage`, `secrets*`, `.env*`,
   `lovelace/`, deploy scripts, `*.device.yaml` staging. These must never reach
   the public repo; a match aborts an apply.
-- **Root reconciliation:** `--apply` writes ONLY under the target's
-  `custom_components/pvautonomy_ops/`. Target-owned root files (`hacs.json`,
-  `README.md`, `LICENSE`, `examples/`) are never touched.
+- **Root reconciliation / target-owned:** `--apply` writes ONLY under the
+  target's `custom_components/pvautonomy_ops/`. Target-owned root files
+  (`hacs.json`, `README.md`, `LICENSE`, `examples/`) are never touched.
+  Additionally, the **version fields are target-owned**: release authority
+  lives in `pvautonomy-ops` (versions are bumped there via `[RELEASE]`
+  commits), so on sync `manifest.json` `"version"` and `const.py` `VERSION`
+  always keep the **target's** current value — the source placeholder (e.g.
+  `0.3.0`) can never downgrade a released `0.4.x`. Every other change in
+  those two files (e.g. new `requirements`, new constants) still syncs.
+  On first sync (file absent in the target) the source file is copied
+  verbatim. If the version field cannot be located in source or target, the
+  apply **fails closed** (nothing written). The dry-run comparison applies
+  the same merge, so `would-update` never reports a version-only diff;
+  such files are listed as `unchanged (version target-owned)`.
 - **Scrub gate:** scans for IPv4 (esp. `192.168.101.*`), `EDATEC`, secret
   keywords, and high-entropy hex/base64/`gh*_` token literals. CRITICAL
   findings fail `--apply` closed; all findings are reported with path + line +
