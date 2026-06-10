@@ -337,14 +337,24 @@ _SECTION_ROW_ORDER: dict[str, list[str]] = {
     # AC active power first, then AC output energy counters, then the
     # electrical detail (frequency, voltages, currents). Grid import/export
     # power deliberately stays in "Grid Flow".
+    # [fix/mic-ac-output-native-current-row] The MIC600 single-phase tokens
+    # (ac_power / ac_frequency / ac_voltage / ac_current) are interleaved with
+    # the SPH tokens so a MIC build renders exactly
+    # AC Power -> AC Frequency -> AC Voltage -> AC Current. The sort matcher
+    # requires a full `_{token}_device` match, so `ac_power` never captures the
+    # SPH `ac_power_total` row (and `ac_current` never captures `ac_current_l1`)
+    # — the SPH relative order below is unchanged.
     "AC Output": [
+        "ac_power",
         "ac_power_total",
         "ac_output_energy_today",
         "ac_output_energy_total",
         "ac_frequency",
+        "ac_voltage",
         "ac_voltage_l1",
         "ac_voltage_l2",
         "ac_voltage_l3",
+        "ac_current",
         "ac_current_l1",
         "ac_current_l2",
         "ac_current_l3",
@@ -1140,32 +1150,13 @@ def build_cards(
                     existing_entity_ids=existing_entity_ids,
                 )
             ]
-            # [P1i] MIC (non-battery): pull AC Current (Iac1) into a one-decimal
-            # markdown row — HA's entities card does not reliably honor sub-amp
-            # display precision, so the live MIC600 renders 0.3 A as "0 A".
-            # Frequency / Power / Voltage stay native entity rows; the two
-            # render together in one "AC Output" vertical-stack. SPH is skipped
-            # (has_battery) and uses `*_ac_current_l1_device`, not the MIC
-            # `*_ac_current_device` suffix matched here.
-            if not has_battery and any(
-                eid.endswith("_ac_current_device") for eid, _ in entities
-            ):
-                ac_current = next(
-                    (e, lbl) for e, lbl in entities
-                    if e.endswith("_ac_current_device")
-                )
-                rest = [
-                    (e, lbl) for e, lbl in entities
-                    if not e.endswith("_ac_current_device")
-                ]
-                stack = []
-                if rest:
-                    stack.append(_make_entities_card("AC Output", rest))
-                stack.append(_build_mic_ac_current_card(*ac_current))
-                cards.append(
-                    _make_vertical_stack(stack) if len(stack) > 1 else stack[0]
-                )
-                continue
+            # [fix/mic-ac-output-native-current-row] The former P1i special
+            # case (MIC AC Current pulled into a one-decimal markdown card)
+            # is retired: AC Current renders as a native entity row like the
+            # other AC rows. Sub-amp display precision comes from the
+            # registry/generator `accuracy_decimals: 1` on the MIC `ac_current`
+            # sensor (firmware-surface contract), not from a dashboard
+            # workaround. Row order is owned by _SECTION_ROW_ORDER above.
 
         if not entities:
             continue
@@ -1467,29 +1458,6 @@ def _build_mic_status_card(
         "type": "markdown",
         "title": "Status",
         "content": "\n\n".join(lines),
-    }
-
-
-def _build_mic_ac_current_card(eid: str, label: str) -> dict[str, Any]:
-    """Render MIC AC Current as a one-decimal markdown line.
-
-    [P1i] HA's core entities card does not reliably honor sub-amp display
-    precision, so on a live MIC600 the customer-visible Iac1 (e.g. 0.3 A)
-    renders as "0 A". This markdown reads the actual entity state and formats
-    it to one decimal — `{{ states(...) | round(1) }} A` — so sub-amp currents
-    stay visible (0 -> ``0.0 A``); non-numeric states (unknown/unavailable/
-    missing) degrade to ``Unknown``. The entity state itself is unchanged
-    (the registry/generator already scale Iac1 by 0.1); only the dashboard
-    presentation is corrected, with no firmware/registry change.
-    """
-    return {
-        "type": "markdown",
-        "content": (
-            f"**{label}:** "
-            f"{{% set v = states('{eid}') | float(none) %}}"
-            f"{{% if v is none %}}Unknown"
-            f"{{% else %}}{{{{ v | round(1) }}}} A{{% endif %}}"
-        ),
     }
 
 
