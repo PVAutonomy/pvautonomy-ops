@@ -1372,9 +1372,9 @@ class ProxyRemoteBuildBackend(BuildBackend):
         self._build_context: dict[str, Any] = {}
         # SEC-010: OTA required flag for proxy builds
         self._ota_required: bool = False
-        # EPIC-004 build_firmware service: when True the proxy artifact cache
-        # is bypassed by omitting payload.yaml_hash so the proxy's existing
-        # missing-hash cold-build path applies (registry-only update scenario).
+        # EPIC-004 build_firmware service / ISSUE-16: audit flag only — the
+        # yaml_authority contract is always kept; the proxy dispatches every
+        # build fresh, so no payload change is needed for a cold build.
         self._force_rebuild: bool = False
         # EPIC-006-D2: track which builds already had a refresh=1 attempt
         self._refresh_attempted: set[str] = set()
@@ -1442,16 +1442,19 @@ class ProxyRemoteBuildBackend(BuildBackend):
         self._ota_required = required
 
     def set_force_rebuild(self, force: bool = True) -> None:
-        """Request a proxy artifact-cache bypass for this build (EPIC-004).
+        """Record that the caller requested a forced rebuild (EPIC-004).
 
-        When set, ``start_build()`` omits ``payload.yaml_hash`` so the proxy's
-        existing "missing yaml hash → cold build" path applies and a stale
-        cached firmware artifact cannot be returned.  This is required for
-        registry-only update scenarios where the local generated YAML is
-        unchanged but the external inverter-registry has new content.
-
-        The generated YAML bytes themselves are not modified — only the
-        cache-lookup key is suppressed.
+        ISSUE-16: force_rebuild no longer changes the wire payload when
+        ``yaml_content`` is available. It used to omit ``payload.yaml_hash``
+        as a cache-bust, which silently dropped the yaml_authority contract
+        and degraded the build to the legacy registry-regeneration path
+        (stale registry/generator on the GHA runner). Verified against
+        pvautonomy-proxy main: the proxy has no build cache — every
+        ``POST /build`` dispatches a fresh workflow run — so there is
+        nothing to bypass. The flag is kept for API compatibility and audit
+        logging. If a proxy build cache is introduced later (EPIC-007), it
+        must expose an explicit bypass field instead of overloading
+        ``yaml_hash``.
         """
         self._force_rebuild = bool(force)
 
@@ -1704,11 +1707,11 @@ class ProxyRemoteBuildBackend(BuildBackend):
           ``payload.compile_secret_envelope`` instead of
           ``payload.encrypted_secrets``. Both secret paths never coexist.
 
-        ``force_rebuild`` suppresses ``payload.yaml_hash`` to defeat the
-        proxy build cache; in that case the non-envelope yaml_authority
-        extras are also suppressed (proxy/workflow require yaml_hash with
-        yaml_authority), so the request degrades to the legacy path for
-        that single build.
+        ``force_rebuild`` never changes the wire shape when ``yaml_content``
+        is available (ISSUE-16): the yaml_authority contract (yaml_hash +
+        build_contract + yaml_content) is always kept. The proxy dispatches
+        every ``/build`` as a fresh workflow run, so a forced cold build
+        needs no payload change.
 
         Build context from ``set_build_context()`` provides the proxy payload.
 
@@ -1735,20 +1738,32 @@ class ProxyRemoteBuildBackend(BuildBackend):
         if esphome_version:
             payload["payload"]["version"] = esphome_version
 
-        # EPIC-006: Content-addressed cache key — hash the final generated YAML
-        # so registry/template changes invalidate the proxy build cache.
+        # EPIC-006: yaml_hash is the end-to-end binding between the YAML
+        # bytes HA generated and the bytes the GHA runner compiles (the
+        # workflow fails closed on sha256 mismatch).
         #
-        # EPIC-004: when force_rebuild was requested, the yaml_hash is
-        # intentionally suppressed so the proxy treats this as a cold build
-        # and cannot serve a stale cached artifact (registry-only update).
+        # ISSUE-16: yaml_hash is NEVER suppressed when yaml_content exists.
+        # force_rebuild used to omit it as a cache-bust, which also dropped
+        # the yaml_authority extras below AND the envelope path (both
+        # require yaml_hash) — silently degrading to the legacy
+        # registry-regeneration path on the runner's stale registry/
+        # generator. The proxy has no build cache (every POST /build
+        # dispatches a fresh workflow run), so the suppression bypassed a
+        # cache that does not exist while changing the build contract.
         yaml_hash = ""
-        if yaml_content and not self._force_rebuild:
+        if yaml_content:
             yaml_hash = hashlib.sha256(yaml_content.encode()).hexdigest()
             payload["payload"]["yaml_hash"] = yaml_hash
+            if self._force_rebuild:
+                _LOGGER.info(
+                    "force_rebuild requested: yaml_authority contract kept "
+                    "(yaml_hash emitted); proxy dispatches are "
+                    "unconditionally fresh builds — no cache to bypass"
+                )
         elif self._force_rebuild:
             _LOGGER.info(
-                "Proxy build cache bypass (force_rebuild): yaml_hash omitted "
-                "from /build payload — proxy will cold-build"
+                "force_rebuild requested without yaml_content: legacy "
+                "registry-regeneration build (behavior unchanged)"
             )
 
         # SEC-010: Flag that build requires OTA authentication
@@ -1817,10 +1832,10 @@ class ProxyRemoteBuildBackend(BuildBackend):
         # Both yaml_content and yaml_hash must be present — the proxy
         # rejects yaml_authority requests missing either field (see
         # pvautonomy-proxy src/guards/validation.ts EPIC-006-B7 guards).
-        # ``force_rebuild`` suppresses yaml_hash above; in that case we
-        # also suppress the build_contract/yaml_content extras so the
-        # request degrades cleanly to the legacy registry-regeneration
-        # path and the proxy cache-bypass intent is honored.
+        # ISSUE-16: yaml_hash is always computed when yaml_content exists,
+        # so force_rebuild can no longer drop this branch. The former
+        # degradation elif (suppress extras, fall back to the runner's
+        # stale registry regeneration) is removed.
         if (
             not envelope_emitted
             and ctx.get("build_contract") == BUILD_CONTRACT_YAML_AUTHORITY
@@ -1834,13 +1849,14 @@ class ProxyRemoteBuildBackend(BuildBackend):
         elif (
             not envelope_emitted
             and ctx.get("build_contract") == BUILD_CONTRACT_YAML_AUTHORITY
-            and self._force_rebuild
         ):
-            _LOGGER.info(
-                "force_rebuild requested with build_contract=yaml_authority; "
-                "yaml_authority extras suppressed so proxy cache-bypass "
-                "(missing yaml_hash) keeps working — workflow will fall back "
-                "to registry-regeneration for this build only"
+            # yaml_authority was requested but no YAML reached this call —
+            # a broken caller, not a supported path. Warn loudly: the build
+            # would silently regenerate from the runner's registry.
+            _LOGGER.warning(
+                "build_contract=yaml_authority requested but yaml_content "
+                "is empty; proxy will reject or the workflow would fall "
+                "back to registry-regeneration — check the caller"
             )
 
         _LOGGER.info(
