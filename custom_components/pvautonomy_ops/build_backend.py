@@ -1913,9 +1913,12 @@ class ProxyRemoteBuildBackend(BuildBackend):
     async def get_status(self, job_id: str) -> BuildStatus:
         """Poll proxy for build status, map to BuildState.
 
-        EPIC-006-D2: If status is terminal (timeout/failed) with no artifact
-        and we haven't tried yet, automatically retry once with ?refresh=1
-        to let the proxy re-poll GitHub and correct stale records.
+        EPIC-006-D2: If status is terminal (timeout/failed/success) with no
+        artifact and we haven't tried yet, automatically retry once with
+        ?refresh=1 to let the proxy re-poll GitHub and correct stale records.
+        ISSUE-19: success-without-artifact triggers the refresh too (poisoned
+        proxy record), and a refreshed artifact is adopted even when the
+        status itself does not change (success → success-with-artifact).
         """
         data = await self._poll_proxy(job_id)
 
@@ -1939,16 +1942,28 @@ class ProxyRemoteBuildBackend(BuildBackend):
             try:
                 refreshed = await self._poll_proxy(job_id, refresh=True)
                 refreshed_status = refreshed.get("status", proxy_status)
-                if refreshed_status != proxy_status:
+                refreshed_artifact = refreshed.get("artifact")
+                # ISSUE-19: adopt the refreshed response when the status
+                # changed OR when an artifact appeared on an unchanged
+                # status (success → success-with-artifact). The pipeline
+                # stops polling on SUCCESS, so this single get_status call
+                # must hand back the repaired artifact.
+                if (
+                    refreshed_status != proxy_status
+                    or refreshed_artifact is not None
+                ):
                     _LOGGER.info(
-                        "Proxy refresh corrected build_id=%s: %s → %s",
+                        "Proxy refresh corrected build_id=%s: %s → %s "
+                        "(artifact %s)",
                         job_id,
                         proxy_status,
                         refreshed_status,
+                        "present" if refreshed_artifact is not None
+                        else "missing",
                     )
                     data = refreshed
                     proxy_status = refreshed_status
-                    artifact = refreshed.get("artifact")
+                    artifact = refreshed_artifact
                 else:
                     _LOGGER.warning(
                         "Refresh did not resolve terminal state; "
