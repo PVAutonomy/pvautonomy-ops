@@ -164,9 +164,12 @@ CONF_OTA_RETRIES = "ota_retries"
 CONF_OTA_RETRY_DELAYS = "ota_retry_delays"
 CONF_CACHE_KEEP_BUILDS = "cache_keep_builds"
 
-# Proxy timeout recovery (EPIC-006-D2)
+# Proxy refresh recovery (EPIC-006-D2)
 CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT = "proxy_auto_refresh_on_timeout"
-PROXY_TERMINAL_NO_ARTIFACT = {"timeout", "failed"}
+# Terminal states that warrant a refresh when artifact is missing.
+# ISSUE-19: "success" included — a transiently poisoned proxy record can
+# report success with artifact: null; the proxy's ?refresh=1 re-resolves it.
+PROXY_TERMINAL_NO_ARTIFACT = {"timeout", "failed", "success"}
 
 # Proxy status → BuildState mapping
 PROXY_STATUS_MAP = {
