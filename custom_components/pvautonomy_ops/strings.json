@@ -275,5 +275,13 @@
         "cancel": "Cancel setup"
       }
     }
+  },
+  "exceptions": {
+    "device_not_set_up": {
+      "message": "Device “{device_name}” is not yet set up in PVAutonomy. Open Settings > Devices & Services > PVAutonomy Ops and either adopt the running device or run setup."
+    },
+    "device_ownership_ambiguous": {
+      "message": "Device “{device_name}” is claimed by more than one PVAutonomy entry ({entries}). Call the service again with an explicit entry_id, or remove the duplicate entry."
+    }
   }
 }

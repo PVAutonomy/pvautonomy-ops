@@ -819,13 +819,19 @@ def _resolve_target_entry_data(
 
 
 # Customer-facing message when a build/install is requested for a device that
-# no ConfigEntry owns. Bilingual inline (service errors are not translated via
-# strings.json). Technical ownership detail is logged separately.
+# no ConfigEntry owns. English fallback only — the localized text lives in
+# strings.json / translations/{en,de}.json under exceptions.device_not_set_up
+# and is selected via the exception's translation_key (P1.3-GO-A). Technical
+# ownership detail is logged separately.
 _DEVICE_NOT_SET_UP_MSG = (
-    "Gerät ist in PVAutonomy noch nicht eingerichtet. Bitte Gerät übernehmen "
-    "oder neu einrichten. / Device is not yet set up in PVAutonomy. Please "
-    "adopt the device or run setup."
+    "Device is not yet set up in PVAutonomy. Open Settings > Devices & "
+    "Services > PVAutonomy Ops and either adopt the running device or run "
+    "setup."
 )
+# translation_key values for the resolver's customer-facing errors; the
+# placeholder names must match exceptions.* in strings.json/translations.
+_TK_DEVICE_NOT_SET_UP = "device_not_set_up"
+_TK_DEVICE_OWNERSHIP_AMBIGUOUS = "device_ownership_ambiguous"
 
 
 def _normalize_device_identifier(name: str) -> str:
@@ -1016,10 +1022,21 @@ async def _resolve_entry_for_device(
             )
             return chosen_eid, chosen_data
         ambiguous = ", ".join(eid for eid, _ in owners)
+        _LOGGER.warning(
+            "pvautonomy_ops: device %r is owned by multiple "
+            "loaded entries (%s) — ambiguous, failing closed",
+            name, ambiguous,
+        )
         raise HomeAssistantError(
-            f"pvautonomy_ops: device {name!r} is owned by multiple "
-            f"loaded entries ({ambiguous}) — specify entry_id to "
-            f"disambiguate"
+            f"Device {name!r} is claimed by more than one PVAutonomy "
+            f"entry ({ambiguous}). Call the service again with an "
+            f"explicit entry_id, or remove the duplicate entry.",
+            translation_domain=DOMAIN,
+            translation_key=_TK_DEVICE_OWNERSHIP_AMBIGUOUS,
+            translation_placeholders={
+                "device_name": name,
+                "entries": ambiguous,
+            },
         )
 
     # ── Phase 2: legacy fallback (single-entry only) ──────────────
@@ -1040,7 +1057,12 @@ async def _resolve_entry_for_device(
             "(available entries: %s)",
             name, ", ".join(sorted(loaded_entries)),
         )
-        raise HomeAssistantError(_DEVICE_NOT_SET_UP_MSG)
+        raise HomeAssistantError(
+            _DEVICE_NOT_SET_UP_MSG,
+            translation_domain=DOMAIN,
+            translation_key=_TK_DEVICE_NOT_SET_UP,
+            translation_placeholders={"device_name": name},
+        )
 
     # Multi-entry with no Phase-1 owner → fail closed. We intentionally
     # do *not* fall back to a source-based tiebreaker across all loaded
@@ -1052,7 +1074,12 @@ async def _resolve_entry_for_device(
         "adopt the device or run setup (available entries: %s)",
         name, ", ".join(sorted(loaded_entries)),
     )
-    raise HomeAssistantError(_DEVICE_NOT_SET_UP_MSG)
+    raise HomeAssistantError(
+        _DEVICE_NOT_SET_UP_MSG,
+        translation_domain=DOMAIN,
+        translation_key=_TK_DEVICE_NOT_SET_UP,
+        translation_placeholders={"device_name": name},
+    )
 
 
 # Service names registered at domain scope (EPIC-015 P1-06)

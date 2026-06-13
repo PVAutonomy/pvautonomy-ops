@@ -426,26 +426,17 @@ def _priority_control_entity_id(device_name: str) -> str:
     return f"select.{device_name}_priority_control_device"
 
 
-def _export_limit_select_entity_id(device_name: str) -> str:
-    """Return the Export Limit mode SELECT entity ID — used as the availability
-    GATE only (the toggle switch is always created but reports unavailable when
-    this source select is absent). The customer dashboard does not render this
-    select directly; it shows the switch's customer-safe ``export_limit_status``
-    attribute read-only (see ``_export_limit_status_source_entity_id``)."""
-    return f"select.{device_name}_export_limit_enable_device"
+def _export_limit_mode_sensor_entity_id(device_name: str) -> str:
+    """Return the Export Limit mode SENSOR entity ID (HR122 readback source).
 
-
-def _export_limit_status_source_entity_id(device_name: str) -> str:
-    """Return the Export Limit status/mode SOURCE entity ID.
-
-    This is the (PR #21) ``PVAutonomyExportLimitToggleSwitch`` whose customer-safe
-    ``export_limit_status`` attribute the dashboard renders READ-ONLY (the same
-    source the pre-PR-#25 Mode row used: ``RS485`` / ``Off`` / ``Pending`` /
-    ``Unexpected (...)`` / ``Unknown``). It is referenced only via a read-only
-    ``attribute`` row + the status markdown template — never as a writable toggle
-    row — so no HR122 write is exposed from the dashboard.
-    """
-    return f"switch.{device_name}_export_limit_toggle_device"
+    [issue #50] HR122 is emitted as a read-only diagnostic sensor (raw value
+    0–3); the former writable select was retired. The customer dashboard
+    renders Export Limit READ-ONLY: this sensor's state is referenced ONLY
+    inside the status markdown template
+    (:func:`_build_export_limit_status_card`) — never as a Lovelace entity row.
+    HR122 mode changes are made at the inverter / Growatt app (product
+    decision 2026-06-12, issues #50/#51)."""
+    return f"sensor.{device_name}_export_limit_enable_device"
 
 
 def _grid_first_schedule_enabled_entity_id(device_name: str) -> str:
@@ -1016,25 +1007,24 @@ def build_cards(
         entry.get("id") == "export_limit_power_rate"
         for entry in registers.get("numbers", [])
     )
-    # Export Limit is rendered READ-ONLY from the switch's customer-safe
-    # ``export_limit_status`` attribute (the source the pre-PR-#25 Mode row used);
-    # the writable HR122 toggle is NOT exposed. Gate on the SOURCE SELECT being
-    # available (the toggle switch is always created but reports unavailable when
-    # its source select is absent), then surface the switch read-only.
+    # Export Limit is rendered READ-ONLY from the HR122 readback sensor's
+    # state; no writable HR122 surface is exposed (issue #51 retired the
+    # PR #21–#24 toggle/unlock path, issue #50 turned the select into a
+    # diagnostic sensor — mode changes happen at the inverter / Growatt app).
     #
-    # [TASK-014W/TASK-014Y] The source select
-    # (select.{device_name}_export_limit_enable_device) is emitted enabled by
+    # [TASK-014W/TASK-014Y] The source sensor
+    # (sensor.{device_name}_export_limit_enable_device) is emitted enabled by
     # default in Extended-tier YAML, but Home Assistant may persist a previously
     # disabled entity-registry entry from older builds; the active-registry
     # fallback covers startup refresh races before hass.states contains the
     # forwarded helper.
     export_limit_status_eid = (
-        _export_limit_status_source_entity_id(device_name)
+        _export_limit_mode_sensor_entity_id(device_name)
         if has_export_limit
         else None
     )
     if export_limit_status_eid is not None and not _dashboard_entity_available(
-        _export_limit_select_entity_id(device_name),
+        export_limit_status_eid,
         live_entity_ids=live_entity_ids,
         existing_entity_ids=existing_entity_ids,
     ):
@@ -1084,10 +1074,10 @@ def build_cards(
                 )
             )
             # Read-only Export Limit Mode + Active/Inactive/Unknown status as a
-            # markdown card. The switch is referenced ONLY inside the Jinja
-            # template — never as a Lovelace entity/attribute row — so the
-            # customer dashboard exposes no Export Limit switch and tapping the
-            # card never opens the switch's More-Info/toggle dialog.
+            # markdown card. The HR122 select is referenced ONLY inside the
+            # Jinja template — never as a Lovelace entity row — so the customer
+            # dashboard exposes no writable Export Limit control and tapping
+            # the card never opens a More-Info/select dialog.
             if export_limit_status_eid is not None:
                 cards.append(
                     _build_export_limit_status_card(export_limit_status_eid)
@@ -1461,46 +1451,43 @@ def _build_mic_status_card(
     }
 
 
-# [fix/sph-export-limit-no-switch-surface] Export Limit is READ-ONLY and rendered
-# entirely as a markdown card — NOT as any Lovelace entity/attribute row. Both
-# lines are sourced from the switch's customer-safe ``export_limit_status``
-# attribute via Jinja ``state_attr`` (RS485 / Off / Pending / Unexpected (...) /
-# Unknown):
-#   * Export Limit Mode   = markdown text line (the raw attribute value).
+# [issue #50/#51] Export Limit is READ-ONLY and rendered entirely as a markdown
+# card — NOT as any Lovelace entity row. Both lines are sourced from the HR122
+# readback sensor's numeric state via Jinja ``states()`` (raw values:
+# 0=Disabled / 1=RS485 Limit / 2=RS232 Limit / 3=CT Meter, per the registry
+# options map):
+#   * Export Limit Mode   = markdown text line (0 → Off, 1 → RS485, 2 → RS232,
+#     3 → CT Meter — same customer wording as before).
 #   * Export Limit status = markdown text line (Active/Inactive/Unknown).
-# The switch is referenced ONLY inside the Jinja template, so the customer
-# dashboard exposes no switch and tapping it never opens the switch's
-# More-Info/toggle dialog. The HR122 toggle is NOT exposed (the on-device write
-# does not reliably persist — toggling reboots the inverter; unlock/VPP
-# preconditions are unverified), and there is deliberately NO "change via the
-# Growatt app" / restart hint.
-_EXPORT_LIMIT_MODE_ATTRIBUTE = "export_limit_status"
-#: export_limit_status / select values that mean the export limit is OFF.
-_EXPORT_LIMIT_INACTIVE_STATES = ("Off", "Disabled")
-#: ...that mean it is actively limiting (switch labels + raw select options).
-_EXPORT_LIMIT_ACTIVE_STATES = ("RS485", "RS485 Limit", "RS232 Limit", "CT Meter")
+# The sensor is referenced ONLY inside the Jinja template, so the customer
+# dashboard exposes no writable control. Mode changes happen at the inverter /
+# Growatt app (product decision 2026-06-12); there is deliberately NO "change
+# via the Growatt app" / restart hint.
+#: Raw HR122 value meaning the export limit is OFF.
+_EXPORT_LIMIT_INACTIVE_VALUE = 0
+#: Raw HR122 value → customer-facing mode label (limiting modes).
+_EXPORT_LIMIT_MODE_LABELS = {1: "RS485", 2: "RS232", 3: "CT Meter"}
 
 
-def _export_limit_active_label(state: str | None) -> str:
-    """Map an Export Limit status/mode value to a read-only status label.
+def _export_limit_active_label(state: str | float | int | None) -> str:
+    """Map a raw HR122 sensor state to a read-only status label.
 
-    Accepts both the switch's customer-safe ``export_limit_status`` labels
-    (``RS485`` / ``Off`` / ``Unexpected (...)``) and the raw select options
-    (``RS485 Limit`` / ``Disabled`` / ``RS232 Limit`` / ``CT Meter``):
+    Accepts the HA state string ("1.0"), a bare number, or None:
 
-    - ``Off`` / ``Disabled`` → ``"Inactive"``
-    - any limiting mode (RS485[ Limit] / RS232 Limit / CT Meter / Unexpected …)
-      → ``"Active"``
-    - anything else (Pending / Unknown / unavailable / missing) → ``"Unknown"``
+    - ``0`` → ``"Inactive"``
+    - ``1`` / ``2`` / ``3`` (RS485 / RS232 / CT Meter) → ``"Active"``
+    - anything else (unknown / unavailable / missing / unmapped) → ``"Unknown"``
 
     Pure + unit-tested; the status markdown renders the equivalent mapping via
     Jinja so the displayed status matches.
     """
-    if state in _EXPORT_LIMIT_INACTIVE_STATES:
+    try:
+        value = int(float(state))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "Unknown"
+    if value == _EXPORT_LIMIT_INACTIVE_VALUE:
         return "Inactive"
-    if state in _EXPORT_LIMIT_ACTIVE_STATES or (
-        isinstance(state, str) and state.startswith("Unexpected")
-    ):
+    if value in _EXPORT_LIMIT_MODE_LABELS:
         return "Active"
     return "Unknown"
 
@@ -1508,24 +1495,30 @@ def _export_limit_active_label(state: str | None) -> str:
 def _build_export_limit_status_card(status_eid: str) -> dict[str, Any]:
     """Read-only Export Limit card (markdown): Mode line + Active/Inactive/Unknown.
 
-    Both lines are derived from the switch's ``export_limit_status`` attribute via
-    a Jinja ``state_attr`` read (the Active/Inactive/Unknown line uses the same
-    mapping as :func:`_export_limit_active_label`). The switch is referenced ONLY
-    inside this template — never as a Lovelace entity or ``attribute`` row — so the
-    customer dashboard exposes no Export Limit switch and tapping the card never
-    opens the switch's More-Info/toggle dialog. No HR122 write is exposed and no
+    Both lines are derived from the HR122 readback sensor's numeric state via a
+    Jinja ``states()`` read (the Active/Inactive/Unknown line uses the same
+    mapping as :func:`_export_limit_active_label`; the Mode line keeps the
+    pre-#50 customer wording — ``0`` → ``Off``, ``1`` → ``RS485``, ``2`` →
+    ``RS232``, ``3`` → ``CT Meter``). The sensor is referenced ONLY inside this
+    template — never as a Lovelace entity row — so the customer dashboard
+    exposes no writable Export Limit control. No HR122 write is exposed and no
     new HA entity is created. Title ``Export Limit`` so the layout places it
     deterministically next to the Control card.
     """
-    active = list(_EXPORT_LIMIT_ACTIVE_STATES)
+    active_values = sorted(_EXPORT_LIMIT_MODE_LABELS)
+    mode_branches = "".join(
+        f"{{% elif v == {raw} %}}{label}"
+        for raw, label in sorted(_EXPORT_LIMIT_MODE_LABELS.items())
+    )
     content = (
-        f"{{% set s = state_attr('{status_eid}', '{_EXPORT_LIMIT_MODE_ATTRIBUTE}') %}}"
+        f"{{% set v = states('{status_eid}') | float(-1) | int %}}"
         f"**Export Limit Mode:** "
-        f"{{% if s in [none, 'unknown', 'unavailable', ''] %}}Unknown"
-        f"{{% else %}}{{{{ s }}}}{{% endif %}}\n\n"
+        f"{{% if v == {_EXPORT_LIMIT_INACTIVE_VALUE} %}}Off"
+        f"{mode_branches}"
+        f"{{% else %}}Unknown{{% endif %}}\n\n"
         f"**Export Limit:** "
-        f"{{% if s in ['Off', 'Disabled'] %}}Inactive"
-        f"{{% elif s in {active} or (s and s.startswith('Unexpected')) %}}Active"
+        f"{{% if v == {_EXPORT_LIMIT_INACTIVE_VALUE} %}}Inactive"
+        f"{{% elif v in {active_values} %}}Active"
         f"{{% else %}}Unknown{{% endif %}}"
     )
     return {"type": "markdown", "title": "Export Limit", "content": content}
