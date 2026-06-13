@@ -3,9 +3,6 @@
 Expose customer-safe boolean controls that proxy richer underlying entities.
 Currently used for:
 
-- Export Limit ON/OFF:
-  - ON  -> select.export_limit_enable = "RS485 Limit"
-  - OFF -> select.export_limit_enable = "Disabled"
 - Priority mode activation:
   - Load First toggle    -> select.priority_control = "Load First"
   - Battery First toggle -> select.priority_control = "Battery First"
@@ -18,7 +15,6 @@ underlying selects/numbers for diagnostics and advanced workflows.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import time as dt_time
@@ -43,39 +39,6 @@ from .time import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_EXPORT_LIMIT_ON_OPTION = "RS485 Limit"
-_EXPORT_LIMIT_OFF_OPTION = "Disabled"
-_EXPORT_LIMIT_ACTIVE_OPTIONS = frozenset({
-    "RS485 Limit",
-    "RS232 Limit",
-    "CT Meter",
-})
-_EXPORT_LIMIT_EXPECTED_OPTION = "RS485 Limit"
-_EXPORT_LIMIT_UNEXPECTED_OPTIONS = frozenset({
-    "RS232 Limit",
-    "CT Meter",
-})
-# HR122 (export_limit_enable) is unlock-gated: the registry write_policy is
-# requires_unlock=true via an unsafe-tier unlock sequence, and the
-# inverter silently ignores the write when the unlock has not run. The
-# unlock is a firmware-side primitive exposed as a button; its absence means
-# there is no path to honor the write, so it is treated as blocking.
-_EXPORT_LIMIT_UNLOCK_SLUG = "growatt_official_unlock"
-# Settle window waited AFTER pressing the unlock button and BEFORE writing
-# HR122. The on-device unlock script (the generator's verified Core2 sequence)
-# runs asynchronously with delays totalling ~7s, and ``button.press`` returns
-# once that script is *started*, not finished. 8s gives the sequence a small
-# margin so HR122 is written only after the inverter is actually unlocked;
-# otherwise the still-locked inverter silently rejects the write and the toggle
-# reverts (the original symptom). This models firmware-script completion by a
-# time window — real completion is confirmed by on-hardware live validation.
-# (Deliberately no unlock register numbers here: this module never touches the
-# unlock password registers; the firmware owns the sequence.)
-_EXPORT_LIMIT_UNLOCK_SETTLE_SECONDS = 8.0
-# Bounded window during which a just-requested HR122 value is held before the
-# source readback becomes the sole source of truth again (no permanent
-# optimistic state).
-_EXPORT_LIMIT_PENDING_SECONDS = 15.0
 _PRIORITY_CONTROL_LOAD_FIRST = "Load First"
 _PRIORITY_CONTROL_BATTERY_FIRST = "Battery First"
 _GRID_FIRST_ACTIVATE = "Grid First"
@@ -108,7 +71,6 @@ async def async_setup_entry(
 
     async_add_entities(
         [
-            PVAutonomyExportLimitToggleSwitch(hass, entry, device_name),
             PVAutonomyPriorityModeToggleSwitch(
                 hass,
                 entry,
@@ -180,215 +142,6 @@ async def _resolve_selected_device_name(
             return None
 
     return None
-
-
-class PVAutonomyExportLimitToggleSwitch(SwitchEntity):
-    """Customer-safe ON/OFF proxy for export_limit_enable (HR122).
-
-    HR122 is a protected, unlock-gated holding register. A bare
-    ``select_option`` write is silently ignored by the inverter unless the
-    unlock sequence (unsafe tier) has run first, so this proxy
-    is fail-closed and honest:
-
-    - ON/OFF is refused with a clear error when no unlock primitive is
-      exposed on the device (e.g. customer firmware without the unlock
-      button) — the write would otherwise appear to succeed while changing
-      nothing.
-    - When an unlock primitive IS present it is invoked before the write.
-    - The reported state is never assumed from the requested action; it is
-      derived from the source-select readback, with a bounded pending window
-      for in-flight writes.
-
-    No password/secret register value is read, logged, or surfaced here; the
-    unlock sequence itself lives in firmware.
-    """
-
-    _attr_entity_category = EntityCategory.CONFIG
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        device_name: str,
-    ) -> None:
-        """Initialize the proxy switch."""
-        self.hass = hass
-        self._entry_id = entry.entry_id
-        self._device_name = device_name
-        self._source_entity_id = f"select.{device_name}_export_limit_enable_device"
-        self.entity_id = f"switch.{device_name}_export_limit_toggle_device"
-        self._attr_unique_id = f"{device_name}_export_limit_toggle_device"
-        self._attr_suggested_object_id = f"{device_name}_export_limit_toggle_device"
-        self._attr_name = "Export Limit"
-        self._attr_icon = "mdi:transmission-tower-export"
-        self._attr_is_on = False
-        self._attr_available = False
-        self._current_mode: str | None = None
-        self._unlock_entity_id = f"button.{device_name}_{_EXPORT_LIMIT_UNLOCK_SLUG}"
-        self._pending_option: str | None = None
-        self._pending_until = 0.0
-
-    async def async_added_to_hass(self) -> None:
-        """Sync initial state and subscribe to source-select changes."""
-        await super().async_added_to_hass()
-        await self._async_refresh_from_source()
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass,
-                [self._source_entity_id],
-                self._handle_source_state_change,
-            )
-        )
-
-    @callback
-    def _handle_source_state_change(self, event) -> None:
-        """Mirror source-select updates into the switch state."""
-        self._apply_source_state(event.data.get("new_state"))
-        self.async_write_ha_state()
-
-    async def async_update(self) -> None:
-        """Refresh from the source select entity."""
-        await self._async_refresh_from_source()
-
-    async def _async_refresh_from_source(self) -> None:
-        """Load the latest state from the source select entity."""
-        self._apply_source_state(self.hass.states.get(self._source_entity_id))
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str | bool | None]:
-        """Expose the current backend mode for diagnostic / support visibility."""
-        return {
-            "export_limit_mode": self._current_mode,
-            "export_limit_status": self._export_limit_status,
-            "unlock_available": self._unlock_available,
-        }
-
-    @property
-    def _unlock_available(self) -> bool:
-        """Return True only when the on-device unlock primitive is usable.
-
-        HR122 writes are silently ignored unless the unlock sequence has run,
-        so a missing/unavailable unlock primitive is blocking. The unlock is
-        exposed as a button; a never-pressed button reports STATE_UNKNOWN,
-        which is still usable — only a missing entity or STATE_UNAVAILABLE
-        counts as unavailable. No password/secret register is read here.
-        """
-        state = self.hass.states.get(self._unlock_entity_id)
-        return state is not None and state.state != STATE_UNAVAILABLE
-
-    @property
-    def _export_limit_status(self) -> str:
-        """Return a customer-safe status for the current export-limit path."""
-        if self._pending_option is not None and monotonic() < self._pending_until:
-            return "Pending"
-        if self._current_mode is None:
-            return "Unknown"
-        if self._current_mode == _EXPORT_LIMIT_OFF_OPTION:
-            return "Off"
-        if self._current_mode == _EXPORT_LIMIT_EXPECTED_OPTION:
-            return "RS485"
-        if self._current_mode in _EXPORT_LIMIT_UNEXPECTED_OPTIONS:
-            return f"Unexpected ({self._current_mode})"
-        return "Unknown"
-
-    def _apply_source_state(self, state: State | None) -> None:
-        """Derive ON/OFF honestly from the source-select readback.
-
-        State is never assumed from the requested action. A just-requested
-        value is held only for a bounded pending window; once the device
-        confirms it (or the window elapses) the readback becomes the sole
-        source of truth, so an ignored/rejected write surfaces instead of a
-        permanent optimistic state.
-        """
-        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            self._attr_available = False
-            self._attr_is_on = False
-            self._current_mode: str | None = None
-            return
-
-        self._attr_available = True
-        self._current_mode = state.state
-
-        if self._pending_option is not None:
-            confirmed = state.state == self._pending_option
-            expired = monotonic() >= self._pending_until
-            if confirmed or expired:
-                self._pending_option = None
-                self._pending_until = 0.0
-            else:
-                # Write still in flight: reflect the requested value for the
-                # bounded pending window only, not the stale readback.
-                self._attr_is_on = (
-                    self._pending_option in _EXPORT_LIMIT_ACTIVE_OPTIONS
-                )
-                return
-
-        self._attr_is_on = state.state in _EXPORT_LIMIT_ACTIVE_OPTIONS
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Enable export limit (fail-closed when no unlock path exists)."""
-        await self._async_apply_option(_EXPORT_LIMIT_ON_OPTION)
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Disable export limit (fail-closed when no unlock path exists)."""
-        await self._async_apply_option(_EXPORT_LIMIT_OFF_OPTION)
-
-    async def _async_apply_option(self, option: str) -> None:
-        """Unlock, then write HR122, never assuming the write succeeded.
-
-        Fail-closed: if no unlock primitive is available the change is
-        refused with a clear error, because the register write would be
-        silently ignored by the inverter. On success the state is re-derived
-        from the source readback inside a bounded pending window — there is
-        no permanent optimistic state.
-        """
-        if not self._unlock_available:
-            raise HomeAssistantError(
-                "Export Limit change blocked: the inverter unlock primitive "
-                "is unavailable, so the HR122 write would be silently ignored. "
-                "Run the device unlock first, then retry."
-            )
-
-        await self._async_run_unlock()
-        # Wait out the on-device unlock settle window before writing HR122.
-        # button.press returns when the ESPHome unlock script is *started*, not
-        # finished; writing HR122 immediately would race the still-running
-        # (~7s, delay-spaced) sequence and hit a locked inverter. Reached only
-        # on the unlock path — the fail-closed guard above has already returned
-        # for the no-unlock case, so we never sleep when no unlock was pressed.
-        await asyncio.sleep(_EXPORT_LIMIT_UNLOCK_SETTLE_SECONDS)
-        await self._async_write_option(option)
-
-        self._pending_option = option
-        self._pending_until = monotonic() + _EXPORT_LIMIT_PENDING_SECONDS
-        await self._async_refresh_from_source()
-        self.async_write_ha_state()
-
-    async def _async_run_unlock(self) -> None:
-        """Invoke the on-device unlock primitive.
-
-        The unlock sequence and any password registers it writes live in
-        firmware; this only presses the exposed button. No secret/password
-        value is handled, logged, or surfaced by the integration.
-        """
-        await self.hass.services.async_call(
-            "button",
-            "press",
-            {"entity_id": self._unlock_entity_id},
-            blocking=True,
-        )
-
-    async def _async_write_option(self, option: str) -> None:
-        """Write a target option through to the underlying select."""
-        await self.hass.services.async_call(
-            "select",
-            "select_option",
-            {
-                "entity_id": self._source_entity_id,
-                "option": option,
-            },
-            blocking=True,
-        )
 
 
 class PVAutonomyPriorityModeToggleSwitch(SwitchEntity):

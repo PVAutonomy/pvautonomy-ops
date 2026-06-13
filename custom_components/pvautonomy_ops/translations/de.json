@@ -275,5 +275,13 @@
         "cancel": "Einrichtung abbrechen"
       }
     }
+  },
+  "exceptions": {
+    "device_not_set_up": {
+      "message": "Gerät „{device_name}“ ist in PVAutonomy noch nicht eingerichtet. Öffne Einstellungen > Geräte & Dienste > PVAutonomy Ops und übernimm das laufende Gerät („Adopt“) oder starte die Einrichtung."
+    },
+    "device_ownership_ambiguous": {
+      "message": "Gerät „{device_name}“ wird von mehreren PVAutonomy-Einträgen beansprucht ({entries}). Rufe den Dienst mit einer expliziten entry_id auf oder entferne den doppelten Eintrag."
+    }
   }
 }

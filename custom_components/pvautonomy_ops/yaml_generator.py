@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from .const import TIER_EXTENDED, TIER_ORDER, TIER_STANDARD
+from .const import TIER_ORDER, TIER_STANDARD
 from .device_id import compute_node_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -211,15 +211,6 @@ def generate_device_yaml(
             base, registry,
             selected_tier=selected_tier,
             modbus_version=modbus_version,
-            map_confirmed=map_confirmed,
-        )
-
-        # 8b. Unlock primitive (button + script) so the export-limit toggle from
-        # PR #21 (PVAutonomyExportLimitToggleSwitch) has the on-device unlock
-        # button it fail-closes on. Extended/unsafe only; SPH-only by detection.
-        _add_unlock_primitive(
-            base, registry,
-            selected_tier=selected_tier,
             map_confirmed=map_confirmed,
         )
 
@@ -808,144 +799,6 @@ def _apply_disabled_by_default(node: dict, reg: dict) -> None:
         if not bool(reg["enabled_by_default"]):
             node["disabled_by_default"] = True
         # enabled_by_default: true → omit
-
-
-# ---------------------------------------------------------------------------
-# Growatt "Official Unlock" primitive (button + script)
-# ---------------------------------------------------------------------------
-# Why this lives in yaml_generator.py (the productive Wizard/Extended path):
-# pipeline.py / config_flow.py build customer firmware via generate_device_yaml,
-# so emitting the primitive here makes button.{device}_growatt_official_unlock
-# exist in the firmware the Wizard flashes. The legacy hand-maintained
-# esphome/sph/components tree is NOT wired into any build (its include hub
-# omits button:/script:), so it cannot satisfy the PR #21 contract.
-#
-# Detection is by registry data (presence of the HR3135 control + HR3136-3138
-# password registers), not a registry schema change — MIC600 lacks them, so it
-# never receives the primitive.
-_UNLOCK_BUTTON_OBJECT_NAME = "Growatt Official Unlock"  # → object_id growatt_official_unlock
-_UNLOCK_SCRIPT_ID = "growatt_official_unlock"
-_UNLOCK_BUTTON_ID = "growatt_official_unlock_button"
-_UNLOCK_CONTROL_ADDRESS = 3135
-_UNLOCK_PASSWORD_ADDRESSES = (3136, 3137, 3138)
-_UNLOCK_REQUIRED_ADDRESSES = (_UNLOCK_CONTROL_ADDRESS, *_UNLOCK_PASSWORD_ADDRESSES)
-# Hardware-verified unlock sequence (M5Stack Core2 / Haus-01, 2025-12-03):
-# write HR3135 = 0 FIRST to activate unlock mode, then the three password words
-# with delays between writes. The password words are the ASCII encoding (big-
-# endian byte pair per uint16) of the constant string "growat": "gr"/"ow"/"at".
-# These values are PUBLIC and CONSTANT — they are NOT a secret, NOT per-device,
-# and NOT a daily-rotating value. (The inverter's "growatt"+YYYYMMDD daily-
-# password scheme writes only these first six, date-independent characters to
-# the registers; the date never reaches a register.) So no secret material and
-# no per-device provisioning is involved.
-_UNLOCK_CONTROL_VALUE = 0  # HR3135 = 0 activates unlock mode
-#: HR3136/3137/3138 ← ASCII "gr"/"ow"/"at" = 0x6772 / 0x6F77 / 0x6174
-_UNLOCK_PASSWORD_VALUES = (0x6772, 0x6F77, 0x6174)
-#: Inter-write delays mirroring the verified Core2 timing.
-_UNLOCK_CONTROL_DELAY = "1000ms"   # after HR3135 = 0
-_UNLOCK_WORD_DELAY = "500ms"       # between password words
-_UNLOCK_SETTLE_DELAY = "5000ms"    # let the unlock take effect before use
-
-
-def _registry_has_unlock_registers(registry: dict) -> bool:
-    """True iff the registry defines the full Growatt unlock register set.
-
-    Detected by HR3135 (control) + HR3136-3138 (password) in registers.numbers.
-    """
-    regs = registry.get("registers")
-    numbers = regs.get("numbers") if isinstance(regs, dict) else None
-    if not isinstance(numbers, list):
-        return False
-    addrs = {n.get("address") for n in numbers if isinstance(n, dict)}
-    return all(addr in addrs for addr in _UNLOCK_REQUIRED_ADDRESSES)
-
-
-def _add_unlock_primitive(
-    config: dict,
-    registry: dict,
-    selected_tier: str = TIER_STANDARD,
-    map_confirmed: bool = False,
-) -> None:
-    """Emit the Growatt 'Official Unlock' primitive (template button + script).
-
-    PR #21's ``PVAutonomyExportLimitToggleSwitch`` is fail-closed: it refuses
-    to change the unlock-gated HR122 (export_limit_enable) unless an on-device
-    unlock primitive exists as ``button.{device}_growatt_official_unlock``.
-    This emits that primitive so the export-limit toggle is operable in the
-    extended/wizard firmware.
-
-    Gating:
-    - tier >= extended only. Standard firmware exposes neither export-limit nor
-      unlock, so standard output is unchanged (no button/script).
-    - registry must define the Growatt unlock register set (HR3135 + 3136-3138).
-      MIC600 has none → no primitive.
-
-    Sequence (hardware-verified — M5Stack Core2 / Haus-01, 2025-12-03):
-    - HR3135 = 0 is written FIRST to activate unlock mode, then HR3136/3137/3138
-      receive the constant public values 0x6772/0x6F77/0x6174 (ASCII "growat"),
-      with delays between writes. There is NO per-device secret, NO daily
-      password, and NO trailing trigger=1: the date-independent first six
-      characters are the only thing the inverter consumes from the register
-      write. The registers are written via ``id(inverter)`` and are never exposed
-      as user-facing entities, so no unsafe-tier control reaches the customer UI.
-
-    Hardware caveat: still requires on-hardware + compile validation per device.
-    Some protected registers additionally require the inverter's VPP mode to be
-    active; whether HR122 (export limit) needs VPP is to be confirmed live.
-    """
-    tier = _effective_tier(selected_tier, map_confirmed)
-    if TIER_ORDER.get(tier, 0) < TIER_ORDER[TIER_EXTENDED]:
-        return
-    if not _registry_has_unlock_registers(registry):
-        return
-
-    a_pw1, a_pw2, a_pw3 = _UNLOCK_PASSWORD_ADDRESSES
-    v_pw1, v_pw2, v_pw3 = _UNLOCK_PASSWORD_VALUES
-
-    def _queue_write(addr: int, value_literal: str) -> str:
-        return (
-            "auto *ctrl = id(inverter);\n"
-            "using esphome::modbus_controller::ModbusCommandItem;\n"
-            "ctrl->queue_command(ModbusCommandItem::create_write_single_command("
-            f"ctrl, {addr}, {value_literal}));\n"
-        )
-
-    # HR3135 = 0 FIRST, then the three constant password words, each its own
-    # step so the delays space the queued Modbus commands exactly like the
-    # verified Core2 reference. No secret, no substitution, no fail-closed
-    # sentinel — the values are public constants.
-    then_steps: list[dict] = [
-        {"lambda": (
-            'ESP_LOGI("growatt_unlock", "step 1: activating unlock (HR3135=0)");\n'
-            + _queue_write(_UNLOCK_CONTROL_ADDRESS, str(_UNLOCK_CONTROL_VALUE))
-        )},
-        {"delay": _UNLOCK_CONTROL_DELAY},
-        {"lambda": _queue_write(a_pw1, f"0x{v_pw1:04X}")},
-        {"delay": _UNLOCK_WORD_DELAY},
-        {"lambda": _queue_write(a_pw2, f"0x{v_pw2:04X}")},
-        {"delay": _UNLOCK_WORD_DELAY},
-        {"lambda": _queue_write(a_pw3, f"0x{v_pw3:04X}")},
-        {"delay": _UNLOCK_SETTLE_DELAY},
-        {"lambda": 'ESP_LOGI("growatt_unlock", "unlock sequence queued");\n'},
-    ]
-
-    if not isinstance(config.get("script"), list):
-        config["script"] = []
-    config["script"].append({"id": _UNLOCK_SCRIPT_ID, "then": then_steps})
-
-    # Template button → HA entity button.{device}_growatt_official_unlock.
-    # NB: name has NO `_device` suffix — PR #21's export-limit toggle expects
-    # exactly the `growatt_official_unlock` object_id.
-    if not isinstance(config.get("button"), list):
-        config["button"] = []
-    config["button"].append({
-        "platform": "template",
-        "name": _UNLOCK_BUTTON_OBJECT_NAME,
-        "id": _UNLOCK_BUTTON_ID,
-        "icon": "mdi:lock-open-check",
-        "entity_category": "config",
-        "on_press": [{"script.execute": _UNLOCK_SCRIPT_ID}],
-    })
 
 
 def _patch_secret_tokens(yaml_text: str) -> str:
