@@ -1012,23 +1012,25 @@ def build_cards(
     # PR #21–#24 toggle/unlock path, issue #50 turned the select into a
     # diagnostic sensor — mode changes happen at the inverter / Growatt app).
     #
-    # [TASK-014W/TASK-014Y] The source sensor
-    # (sensor.{device_name}_export_limit_enable_device) is emitted enabled by
-    # default in Extended-tier YAML, but Home Assistant may persist a previously
-    # disabled entity-registry entry from older builds; the active-registry
-    # fallback covers startup refresh races before hass.states contains the
-    # forwarded helper.
+    # [issue #55] This card is gated ONLY on the registry contract
+    # (``has_export_limit``), NOT on runtime entity presence. It is a read-only
+    # *markdown* card whose Jinja reads the sensor's state and degrades to
+    # "Unknown" when the sensor is absent — so it must NOT be live-gated like an
+    # entity row. The previous ``_dashboard_entity_available`` gate dropped the
+    # card entirely during the reflash window: an OTA reflash reboots the
+    # device, so on a near-simultaneous HA restart the esphome sensor is in
+    # neither ``hass.states`` nor the entity registry yet (TASK-014W/Y's
+    # active-registry fallback only helps once the entry is registered), and the
+    # card vanished instead of showing "Unknown" → "RS485" once the device
+    # reconnects. The registry-contract gate keeps the card present and lets the
+    # markdown degrade gracefully. (Entity rows / priority_control keep their
+    # live-gate, where a missing entity would render an "Entität nicht gefunden"
+    # placeholder.)
     export_limit_status_eid = (
         _export_limit_mode_sensor_entity_id(device_name)
         if has_export_limit
         else None
     )
-    if export_limit_status_eid is not None and not _dashboard_entity_available(
-        export_limit_status_eid,
-        live_entity_ids=live_entity_ids,
-        existing_entity_ids=existing_entity_ids,
-    ):
-        export_limit_status_eid = None
 
     # Build cards
     # [TASK-014O 2026-05-02] Battery SoC gauge retired — the Battery card's
