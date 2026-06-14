@@ -38,6 +38,16 @@ Home Assistant integration for fleet management of PVAutonomy edge devices (ESP3
 6. Restart Home Assistant
 7. Go to **Settings → Devices & Services → Add Integration → PVAutonomy Ops**
 
+> **HACS is the canonical install & update path for this integration.** Install
+> and update it through HACS so Home Assistant reports the correct version and
+> the native update UI works. Do **not** also use the *PVAutonomy Installer /
+> Updater* add-on for this integration on the same system: the add-on writes
+> files directly without touching HACS's version metadata, so the two diverge
+> (a "split-brain" — HACS shows one version while the files on disk are
+> another). The add-on installer exists only for firmware-bootstrap / true
+> no-HACS-edge systems. See
+> [PVAutonomy/pvautonomy-config#58](https://github.com/PVAutonomy/pvautonomy-config/issues/58).
+
 ## Configuration
 
 After adding the integration, open the integration options:
