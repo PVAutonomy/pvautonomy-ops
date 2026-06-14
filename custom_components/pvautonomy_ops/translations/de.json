@@ -3,10 +3,10 @@
     "step": {
       "user": {
         "title": "PVAutonomy Einrichtung",
-        "description": "Wählen Sie, wie Ihr PVAutonomy-Gerät hinzugefügt werden soll.",
+        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Neues Gerät erstmalig einrichten** — für ein fabrikneues oder noch nicht eingerichtetes Gerät: PVAutonomy erstellt die Firmware und flasht sie.\n\n**Schon laufendes Gerät nachträglich registrieren** — Sonderfall: Ihr Gerät läuft bereits, taucht aber in PVAutonomy nicht auf (z. B. nach einer HA-Neuinstallation). Es wird nichts gebaut, geflasht oder umgezogen.",
         "menu_options": {
-          "setup_new": "Neues Gerät einrichten (Firmware erstellen + flashen)",
-          "adopt_existing": "Laufendes Gerät übernehmen (nur registrieren — kein Build/Flash)"
+          "setup_new": "Neues Gerät erstmalig einrichten (Firmware erstellen + flashen)",
+          "adopt_existing": "Schon laufendes Gerät nachträglich registrieren (kein Build/Flash)"
         }
       },
       "proxy": {

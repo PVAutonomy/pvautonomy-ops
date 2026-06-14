@@ -3,10 +3,10 @@
     "step": {
       "user": {
         "title": "PVAutonomy Setup",
-        "description": "Choose how to add your PVAutonomy device.",
+        "description": "How would you like to add your PVAutonomy device?\n\n**Set up a new device** — for a factory-fresh or not-yet-configured device: PVAutonomy builds the firmware and flashes it.\n\n**Register an already-running device** — special case: your device is already running but does not appear in PVAutonomy (e.g. after a Home Assistant reinstall). Nothing is built, flashed, or relocated.",
         "menu_options": {
-          "setup_new": "Set up new device (build + flash firmware)",
-          "adopt_existing": "Adopt running device (register only — no build/flash)"
+          "setup_new": "Set up a new device (build + flash firmware)",
+          "adopt_existing": "Register an already-running device (no build/flash)"
         }
       },
       "proxy": {
