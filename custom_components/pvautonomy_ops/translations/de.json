@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "PVAutonomy Einrichtung",
-        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Neues Gerät erstmalig einrichten** — für ein fabrikneues oder noch nicht eingerichtetes Gerät: PVAutonomy erstellt die Firmware und flasht sie.\n\n**Schon laufendes Gerät nachträglich registrieren** — Sonderfall: Ihr Gerät läuft bereits, taucht aber in PVAutonomy nicht auf (z. B. nach einer HA-Neuinstallation). Es wird nichts gebaut, geflasht oder umgezogen.",
+        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Neues Gerät erstmalig einrichten** — für ein fabrikneues oder noch nicht eingerichtetes Gerät: PVAutonomy erstellt die Firmware und flasht sie.\n\n**Schon laufendes Gerät nachträglich registrieren** — Sonderfall: Ihr Gerät läuft bereits, taucht aber in PVAutonomy nicht auf (z. B. nach einer HA-Neuinstallation). Es wird nichts gebaut, geflasht oder umgezogen.\n\n**Funktionsumfang ändern (Standard/Erweitert)** — bei einem bereits eingerichteten Gerät: *Neues Gerät erstmalig einrichten* wählen und **dieselbe Gerätenummer** angeben; das Gerät wird neu geflasht, dabei wählst du den Funktionsumfang.",
         "menu_options": {
           "setup_new": "Neues Gerät erstmalig einrichten (Firmware erstellen + flashen)",
           "adopt_existing": "Schon laufendes Gerät nachträglich registrieren (kein Build/Flash)"
@@ -93,7 +93,7 @@
       },
       "summary": {
         "title": "Geräte-Einrichtung bestätigen",
-        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nKlicken Sie auf **Absenden**, um die Firmware-Erstellung zu starten."
+        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\nFunktionsumfang: {selected_tier}\n\nKlicken Sie auf **Absenden**, um die Firmware-Erstellung zu starten."
       },
       "adopt_confirm": {
         "title": "Laufendes Gerät übernehmen",

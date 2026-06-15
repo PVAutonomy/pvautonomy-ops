@@ -1125,6 +1125,11 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "manufacturer": self._manufacturer.title(),
                 "model": display_name,
                 "mac_suffix": self._mac_suffix or "(not bound)",
+                # [issue #57 follow-up] Show the chosen feature level
+                # (Funktionsumfang) on the pre-build confirm screen, not just on
+                # the completion screen — the operator confirms the tier BEFORE
+                # the build starts.
+                "selected_tier": _tier_display_label(self.hass, self._selected_tier),
             },
         )
 
