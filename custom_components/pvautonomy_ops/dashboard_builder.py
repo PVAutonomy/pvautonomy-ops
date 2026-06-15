@@ -2020,12 +2020,53 @@ async def _create_dashboard_impl(
         )
 
     # --- Step 2: Write view/card config ---
-    config_store = Store(hass, version=1, key=f"lovelace.{url_path}", minor_version=1)
-    await config_store.async_save(config["data"])
-    num_cards = len(config["data"]["config"]["views"][0]["cards"])
-    _LOGGER.info(
-        "Dashboard config written for %s (%d cards)", url_path, num_cards
-    )
+    # [issue #67] Prefer writing THROUGH Home Assistant's in-memory
+    # LovelaceStorage object: that updates HA's cached config AND fires the
+    # ``lovelace_updated`` event, so open frontends reload the dashboard
+    # automatically — no HA restart and no manual browser reload after a
+    # "Dashboard aktualisieren" / tier re-flash. A direct Store write (the
+    # historical path) leaves HA's cached config stale until a restart, so the
+    # corrected dashboard only appears after a restart. This uses HA-internal
+    # lovelace data structures, so it is fail-safe: ANY problem falls back to the
+    # direct Store write — i.e. exactly the previous behaviour, never worse.
+    lovelace_config = config["data"]["config"]
+    num_cards = len(lovelace_config["views"][0]["cards"])
+    saved_via_lovelace = False
+    try:
+        lovelace_data = hass.data.get("lovelace")
+        dashboards = getattr(lovelace_data, "dashboards", None)
+        if dashboards is None and isinstance(lovelace_data, dict):
+            dashboards = lovelace_data.get("dashboards")
+        dashboard_obj = dashboards.get(url_path) if dashboards else None
+        if dashboard_obj is not None and hasattr(dashboard_obj, "async_save"):
+            await dashboard_obj.async_save(lovelace_config)
+            saved_via_lovelace = True
+            _LOGGER.info(
+                "Dashboard config saved via LovelaceStorage for %s (%d cards) "
+                "— open clients auto-reload (no restart needed)",
+                url_path,
+                num_cards,
+            )
+    except Exception:  # noqa: BLE001 — HA-internal API; fall back below
+        _LOGGER.debug(
+            "LovelaceStorage save path unavailable for %s; falling back to "
+            "direct store write",
+            url_path,
+            exc_info=True,
+        )
+        saved_via_lovelace = False
+
+    if not saved_via_lovelace:
+        config_store = Store(
+            hass, version=1, key=f"lovelace.{url_path}", minor_version=1
+        )
+        await config_store.async_save(config["data"])
+        _LOGGER.info(
+            "Dashboard config written (direct store) for %s (%d cards) "
+            "— reload the page to see changes",
+            url_path,
+            num_cards,
+        )
 
     # --- Step 3: Register panel so sidebar updates immediately ---
     try:
