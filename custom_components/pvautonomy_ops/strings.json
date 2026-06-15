@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "PVAutonomy Setup",
-        "description": "How would you like to add your PVAutonomy device?\n\n**Set up a new device** — for a factory-fresh or not-yet-configured device: PVAutonomy builds the firmware and flashes it.\n\n**Register an already-running device** — special case: your device is already running but does not appear in PVAutonomy (e.g. after a Home Assistant reinstall). Nothing is built, flashed, or relocated.",
+        "description": "How would you like to add your PVAutonomy device?\n\n**Set up a new device** — for a factory-fresh or not-yet-configured device: PVAutonomy builds the firmware and flashes it.\n\n**Register an already-running device** — special case: your device is already running but does not appear in PVAutonomy (e.g. after a Home Assistant reinstall). Nothing is built, flashed, or relocated.\n\n**Change the feature level (Standard/Extended)** — for an already-configured device: choose *Set up a new device* and enter the **same device number**; the device is re-flashed and you pick the feature level.",
         "menu_options": {
           "setup_new": "Set up a new device (build + flash firmware)",
           "adopt_existing": "Register an already-running device (no build/flash)"
@@ -93,7 +93,7 @@
       },
       "summary": {
         "title": "Confirm Device Setup",
-        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nClick **Submit** to start building firmware."
+        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\nFeature level: {selected_tier}\n\nClick **Submit** to start building firmware."
       },
       "adopt_confirm": {
         "title": "Adopt Running Device",
