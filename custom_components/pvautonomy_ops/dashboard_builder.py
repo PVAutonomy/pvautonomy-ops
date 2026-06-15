@@ -844,6 +844,7 @@ def build_cards(
     live_entity_ids: set[str] | None = None,
     mac_suffix: str | None = None,
     entry_id: str | None = None,
+    selected_tier: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build Lovelace cards from a registry.
 
@@ -909,6 +910,16 @@ def build_cards(
             # [EPIC-010 2026-03-29] Dashboard shows Standard + Erweitert only.
             if entry.get("tier") == "unsafe":
                 continue
+            # [issue #67/#68] Tier-aware: on a Standard-tier device, drop
+            # extended-only controls so a tier-down re-flash does not leave
+            # stale "Entität nicht gefunden" rows until a HA restart prunes the
+            # registry — the refresh reads the entry's tier immediately. Guarded
+            # by live state: a device whose entry tier is unset/mis-tagged but
+            # actually runs Extended keeps any control that is genuinely live.
+            if entry.get("tier") == "extended" and selected_tier == "standard":
+                _eid = _entity_id(device_name, entry, domain)
+                if not (live_entity_ids is not None and _eid in live_entity_ids):
+                    continue
             group = _classify_entity(entry, bucket)
             if group is None:
                 continue
@@ -1031,6 +1042,19 @@ def build_cards(
         if has_export_limit
         else None
     )
+    # [issue #68] Tier-aware suppression. A Standard-tier device never builds the
+    # extended export_limit register, so the registry-contract gate above would
+    # render a permanent "Export Limit: Unknown" card (not acceptable). Suppress
+    # the card when the selected tier is Standard AND the mode sensor is not
+    # actually live. For Extended (selected_tier != "standard") this is a no-op,
+    # so #55 is preserved verbatim: the card stays on the registry contract and
+    # degrades gracefully ("Unknown" → "RS485") across the reflash window. The
+    # live check keeps a device whose entry tier is unset/mis-tagged but actually
+    # runs Extended from losing the card.
+    if export_limit_status_eid is not None and selected_tier == "standard" and not (
+        live_entity_ids is not None and export_limit_status_eid in live_entity_ids
+    ):
+        export_limit_status_eid = None
 
     # Build cards
     # [TASK-014O 2026-05-02] Battery SoC gauge retired — the Battery card's
@@ -1777,6 +1801,7 @@ def build_dashboard_config(
     live_entity_ids: set[str] | None = None,
     mac_suffix: str | None = None,
     entry_id: str | None = None,
+    selected_tier: str | None = None,
 ) -> dict[str, Any]:
     """Build the full Lovelace storage config payload.
 
@@ -1794,6 +1819,7 @@ def build_dashboard_config(
         live_entity_ids=live_entity_ids,
         mac_suffix=mac_suffix,
         entry_id=entry_id,
+        selected_tier=selected_tier,
     )
     has_battery = registry.get("features", {}).get("battery_storage", False)
     view_cards = (
@@ -1851,9 +1877,11 @@ async def async_create_dashboard(
     Fail-safe: logs errors but never raises.
 
     EPIC-012 dashboard API safety contract: ``modbus_version``, ``pv_strings``,
-    ``model_slug``, and ``selected_tier`` are accepted to keep observed
-    callsites compatible. They are reserved for future dashboard policy and do
-    not alter dashboard generation in this minimal safety port.
+    and ``model_slug`` are accepted to keep observed callsites compatible and are
+    reserved for future dashboard policy. ``selected_tier`` (from
+    ``entry.options[CONF_SELECTED_TIER]``) IS used: on a Standard-tier device the
+    builder drops extended-only controls and suppresses the Export-Limit card
+    (issues #67/#68); Extended tier is unchanged (#55 preserved).
 
     Returns True if dashboard was created or refreshed, False if failed.
     """
@@ -1865,6 +1893,7 @@ async def async_create_dashboard(
                 display_title,
                 registry_file,
                 entry_id=entry_id,
+                selected_tier=selected_tier,
             )
     except Exception:
         _LOGGER.warning(
@@ -1882,6 +1911,7 @@ async def _create_dashboard_impl(
     registry_file: str,
     *,
     entry_id: str | None = None,
+    selected_tier: str | None = None,
 ) -> bool:
     """Internal: create or refresh dashboard.
 
@@ -1966,6 +1996,7 @@ async def _create_dashboard_impl(
         live_entity_ids=live_entity_ids,
         mac_suffix=mac_suffix,
         entry_id=entry_id,
+        selected_tier=selected_tier,
     )
 
     # --- Step 1: Add registry entry only if not yet present ---
