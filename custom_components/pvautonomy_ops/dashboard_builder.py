@@ -397,7 +397,13 @@ _COMPACT_LABELS: dict[str, str] = {
     "inverter_temperature": "Inverter Temperature",
     "battery_temperature": "Battery Temperature",
     "wifi_signal": "Edge WiFi Signal",
-    "uptime": "Edge Uptime",
+    # [fix/edge-restart-label] The uptime sensor is now device_class: timestamp
+    # (the boot time), which HA renders natively as a localized relative time
+    # ("vor X" / "X ago"). Label it "Edge Restart" so that reads correctly —
+    # "Edge Restart: vor 4 Stunden" — instead of the literal "Edge Uptime: vor
+    # 4 Stunden". The entity_id stays language-neutral `…_uptime`; only the
+    # display label changes (D-ADDON-I18N-001).
+    "uptime": "Edge Restart",
 }
 
 
@@ -569,10 +575,13 @@ def _resolve_wifi_signal_entity_id(
     Thin wrapper over :func:`_resolve_bridge_diagnostic_entity_id` for the
     ``wifi_signal`` diagnostic; see it for the full resolution order/rationale.
 
-    [TASK-014P 2026-05-03] The bridge firmware on EDATEC does not currently
-    publish a ``*_wifi_signal`` sensor (only ssid/version/ip/mac), so the row
-    is omitted on the live dashboard; the contract leaves room for it to appear
-    automatically once such a sensor ships.
+    [updated 2026-06-16] The Edge101 bridge firmware DOES publish a
+    ``*_wifi_signal`` sensor — verified live on EDATEC for both the SPH
+    (``…_2eb1e4_wifi_signal``) and MIC (``…_17e9c4_wifi_signal``) bridges, so
+    the row renders on both dashboards. (Supersedes the stale TASK-014P
+    2026-05-03 note that claimed only ssid/version/ip/mac were published.) The
+    row stays live-gated, so it is still omitted on any system whose bridge does
+    not publish it.
     """
     return _resolve_bridge_diagnostic_entity_id(
         device_name,
@@ -590,7 +599,7 @@ def _resolve_uptime_entity_id(
     live_entity_ids: set[str] | None = None,
     existing_entity_ids: set[str] | None = None,
 ) -> str | None:
-    """Resolve the runtime Edge Uptime sensor entity ID (live-gated).
+    """Resolve the runtime Edge Restart (uptime) sensor entity ID (live-gated).
 
     Thin wrapper over :func:`_resolve_bridge_diagnostic_entity_id` for the
     ``uptime`` diagnostic. Prefers the deterministic bridge sensor
@@ -1086,6 +1095,18 @@ def build_cards(
             status_card = _build_mic_status_card(list(merged.get("Status", [])))
             if status_card:
                 cards.append(status_card)
+            # [I1 2026-06-16] Edge bridge diagnostics (Edge WiFi Signal + Edge
+            # Restart) as a native *entities* card so HA renders the timestamp as
+            # localized relative time and the WiFi signal with its dBm unit (the
+            # markdown Status card above would show their raw state). Live-gated,
+            # mac_suffix-aware — same resolver contract SPH uses.
+            edge_card = _build_mic_edge_status_card(
+                device_name,
+                live_entity_ids=live_entity_ids,
+                mac_suffix=mac_suffix,
+            )
+            if edge_card:
+                cards.append(edge_card)
             continue
 
         if title == "Control":
@@ -1349,9 +1370,10 @@ def _build_sph_status_card(
     """Build the SPH Status card with synthetic + registry-derived rows.
 
     Order: Inverter Temperature, Battery Temperature, Edge WiFi Signal,
-    Edge Uptime. The Edge WiFi Signal and Edge Uptime rows are optional
+    Edge Restart. The Edge WiFi Signal and Edge Restart rows are optional
     bridge diagnostics: each is rendered only when its resolver finds a
     live entity (otherwise the row is skipped — never shown as missing).
+    (Edge Restart is the ``uptime`` timestamp sensor; see _COMPACT_LABELS.)
     """
     rows: list[tuple[str, str]] = []
     for reg_id, domain in _SPH_STATUS_ROWS:
@@ -1362,17 +1384,16 @@ def _build_sph_status_card(
                 live_entity_ids=live_entity_ids,
             )
             if eid is None:
-                # [TASK-014P 2026-05-03] Skip the row entirely when no
-                # live WiFi Signal sensor is present in hass.states.
-                # The bridge firmware on EDATEC does not currently
-                # publish one (only ssid/version/ip/mac), so the row
-                # would otherwise appear as "Entität nicht gefunden".
+                # Skip the row entirely when no live WiFi Signal sensor is
+                # present in hass.states, so it is never an "Entität nicht
+                # gefunden" row. (The EDATEC bridges DO publish wifi_signal —
+                # verified 2026-06-16; the gate guards systems that don't.)
                 continue
         elif reg_id == "uptime":
-            # [P1b] Edge Uptime is an optional bridge diagnostic: render it
-            # only when a live uptime sensor exists, so it never surfaces an
-            # "Entität nicht gefunden" row and appears automatically once the
-            # bridge publishes it on a customer system.
+            # [P1b] Edge Restart (the uptime timestamp sensor) is an optional
+            # bridge diagnostic: render it only when a live uptime sensor
+            # exists, so it never surfaces an "Entität nicht gefunden" row and
+            # appears automatically once the bridge publishes it.
             eid = _resolve_uptime_entity_id(
                 device_name,
                 mac_suffix=mac_suffix,
@@ -1474,6 +1495,49 @@ def _build_mic_status_card(
         "type": "markdown",
         "title": "Status",
         "content": "\n\n".join(lines),
+    }
+
+
+def _build_mic_edge_status_card(
+    device_name: str,
+    *,
+    live_entity_ids: set[str] | None,
+    mac_suffix: str | None,
+) -> dict[str, Any] | None:
+    """Build the MIC Edge-diagnostics card (Edge WiFi Signal + Edge Restart).
+
+    [I1 2026-06-16] MIC's primary Status card is *markdown* (it maps
+    ``inverter_status`` 0/1/3 → text and rounds the temperature), which would
+    render a ``device_class: timestamp`` / dBm sensor as its bare raw state
+    (e.g. a raw ISO datetime). The optional Edge bridge diagnostics are therefore
+    surfaced in a separate *entities* card so Home Assistant renders them
+    natively — **Edge Restart** as a localized relative time ("vor X" / "X ago")
+    and **Edge WiFi Signal** with its dBm unit. This mirrors the SPH contract
+    (:func:`_build_sph_status_card`) for the non-battery layout.
+
+    Each row is live-gated by its resolver (mac_suffix-aware): rendered only when
+    the live bridge sensor exists, so a bridge that publishes neither yields no
+    card (``None``) and never an "Entität nicht gefunden" phantom row. The card
+    is intentionally **untitled** so it reads as a continuation of the markdown
+    Status card above it rather than a second "Status" header.
+    """
+    rows: list[tuple[str, str]] = []
+    wifi_eid = _resolve_wifi_signal_entity_id(
+        device_name, mac_suffix=mac_suffix, live_entity_ids=live_entity_ids
+    )
+    if wifi_eid is not None:
+        rows.append((wifi_eid, _COMPACT_LABELS["wifi_signal"]))
+    uptime_eid = _resolve_uptime_entity_id(
+        device_name, mac_suffix=mac_suffix, live_entity_ids=live_entity_ids
+    )
+    if uptime_eid is not None:
+        rows.append((uptime_eid, _COMPACT_LABELS["uptime"]))
+    if not rows:
+        return None
+    return {
+        "type": "entities",
+        "show_header_toggle": False,
+        "entities": [{"entity": eid, "name": label} for eid, label in rows],
     }
 
 
