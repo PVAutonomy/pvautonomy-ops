@@ -1,0 +1,11 @@
+{
+  "$schema": "schema/defs-manifest-schema.json",
+  "defs_version": "1.0.0",
+  "schema_version": "1.0.0",
+  "registry_index_version": "1.0.0",
+  "base_version": "1.0.0",
+  "esphome_min_version": "2025.12.0",
+  "generated": "2026-06-16",
+  "source": "PVAutonomy/pvautonomy-config — interim in-repo firmware-definition source of truth (ADR-0001 P0/P1). Bundled into the integration release in P2; relocated into firmware-defs/ in P1-e.",
+  "description": "Single versioned manifest for the WHOLE PVAutonomy firmware-definition unit (base templates + register database + schema + metadata). defs_version is the umbrella version that P2 bundles into the integration release and P3 records in the per-device firmware manifest for ADR-0001 C3 traceability. defs_version is NOT an alias of any single component version: registry_index_version mirrors inverter-registry/index.json.version; schema_version tracks schema/inverter-registry-schema.json (authored in P1-a); base_version tracks the bundled ESPHome base snapshot (no prior version marker existed — 1.0.0 is the initial declared value). The three component versions bump independently; defs_version bumps whenever any component changes. The initial values coincide at 1.0.0 only because this is the first bundle. This step performs no structure move (P1-e) and no runtime wiring (P2)."
+}

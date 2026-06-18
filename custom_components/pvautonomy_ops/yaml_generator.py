@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from .const import TIER_ORDER, TIER_STANDARD
+from .defs_paths import resolve_base_dir, resolve_registry_root
 from .device_id import compute_node_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,11 +123,8 @@ def _effective_tier(selected_tier: str, map_confirmed: bool) -> str:
         return TIER_STANDARD
     return selected_tier
 
-# Paths to base configs and registry (auto-detect local vs server)
-_LOCAL_ESPHOME = Path("esphome")
-_SERVER_ESPHOME = Path("/config/esphome")
-_LOCAL_REGISTRY = Path("inverter-registry")
-_SERVER_REGISTRY = Path("/config/inverter-registry")
+# Firmware-definition data locations are resolved by the shared resolver
+# (bundle-first, /config D8 fallback) — see defs_paths.py.
 
 
 class YamlGenerationError(Exception):
@@ -245,10 +243,7 @@ def generate_device_yaml(
 def _load_production_base(base_path: Path | None = None) -> dict[str, Any]:
     """Load edge101-production-base.yaml."""
     if base_path is None:
-        if _LOCAL_ESPHOME.exists():
-            base_path = _LOCAL_ESPHOME
-        else:
-            base_path = _SERVER_ESPHOME
+        base_path = resolve_base_dir()
 
     path = base_path / "edge101-production-base.yaml"
     if not path.exists():
@@ -284,10 +279,7 @@ def _load_registry(
 ) -> dict[str, Any]:
     """Load inverter registry JSON."""
     if registry_root is None:
-        if _LOCAL_REGISTRY.exists():
-            registry_root = _LOCAL_REGISTRY
-        else:
-            registry_root = _SERVER_REGISTRY
+        registry_root = resolve_registry_root()
 
     path = registry_root / registry_file
     if not path.exists():

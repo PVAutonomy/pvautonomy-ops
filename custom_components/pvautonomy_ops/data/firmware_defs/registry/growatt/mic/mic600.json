@@ -1,0 +1,249 @@
+{
+  "$schema": "../../../schema/inverter-registry-schema.json",
+  "manufacturer": "Growatt",
+  "model": "MIC600TL-X",
+  "series": "mic",
+  "description": "Growatt MIC 600-3300TL-X Micro Inverter Series",
+  "protocol": {
+    "type": "modbus_rtu",
+    "slave_id": 1,
+    "baud_rate": 9600,
+    "data_bits": 8,
+    "parity": "none",
+    "stop_bits": 1
+  },
+  "features": {
+    "battery_storage": false,
+    "grid_tie": true,
+    "off_grid": false,
+    "pv_strings": 1,
+    "phases": 1,
+    "apr_control": true
+  },
+  "registers": {
+    "sensors": [
+      {
+        "name": "Inverter Status",
+        "id": "inverter_status",
+        "address": 0,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 1,
+        "unit": "",
+        "icon": "mdi:information-outline",
+        "entity_category": "diagnostic",
+        "note": "0=Standby, 1=Running, 3=Fault"
+      },
+      {
+        "name": "PV Power",
+        "id": "pv_power",
+        "address": 2,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:solar-panel",
+        "note": "Ppv Low Word (IR2). Single MPPT — U_WORD sufficient. Scan 2026-03-12: 540W at noon."
+      },
+      {
+        "name": "PV1 Voltage",
+        "id": "pv1_voltage",
+        "address": 3,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:flash"
+      },
+      {
+        "name": "PV1 Current",
+        "id": "pv1_current",
+        "address": 4,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "A",
+        "device_class": "current",
+        "state_class": "measurement",
+        "icon": "mdi:current-dc"
+      },
+      {
+        "name": "AC Power",
+        "id": "ac_power",
+        "address": 36,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:power-plug",
+        "note": "Pac. Confirmed working in ESPHome. Scan 2026-03-12: 534W at noon."
+      },
+      {
+        "name": "AC Frequency",
+        "id": "ac_frequency",
+        "address": 37,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.01,
+        "unit": "Hz",
+        "device_class": "frequency",
+        "state_class": "measurement",
+        "icon": "mdi:sine-wave",
+        "note": "Fac. Scan 2026-03-12: raw=5000 → 50.00Hz ✅. Was WRONG at IR38 (=Vac fault threshold 24Hz)."
+      },
+      {
+        "name": "AC Voltage",
+        "id": "ac_voltage",
+        "address": 38,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:flash",
+        "note": "Vac1. Scan 2026-03-12: raw=2404 → 240.4V ✅. Was WRONG at IR35 (=0)."
+      },
+      {
+        "name": "AC Current",
+        "id": "ac_current",
+        "address": 39,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "A",
+        "device_class": "current",
+        "state_class": "measurement",
+        "accuracy_decimals": 1,
+        "icon": "mdi:current-ac",
+        "note": "Iac1 (MIC600 Modbus v3.14 §4.2 Input Reg 15, unit 0.1A). Scale 0.1 + accuracy_decimals 1 so sub-amp currents (e.g. raw=3 → 0.3A) render as 0.3 A, not 0 A. Scan 2026-03-12: raw=21 → 2.1A (540W/240V≈2.25A ✅). NEW sensor."
+      },
+      {
+        "name": "DC Bus Voltage",
+        "id": "dc_bus_voltage",
+        "address": 41,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:flash",
+        "entity_category": "diagnostic",
+        "note": "P-Bus internal DC voltage. Scan 2026-03-12: raw=4805 → 480.5V (plausibel für DC-Zwischenkreis). Protocol v3.14 IR41=IPM Temp but V0.50 maps this differently."
+      },
+      {
+        "name": "Energy Today",
+        "id": "energy_today",
+        "address": 54,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "kWh",
+        "device_class": "energy",
+        "state_class": "total_increasing",
+        "icon": "mdi:counter"
+      },
+      {
+        "name": "Energy Total",
+        "id": "energy_total",
+        "address": 56,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "kWh",
+        "device_class": "energy",
+        "state_class": "total_increasing",
+        "icon": "mdi:counter",
+        "note": "U_WORD (not DWORD). Scan 2026-03-12: raw=2757 → 275.7kWh (ESPHome showed 272kWh prev day ✅)."
+      },
+      {
+        "name": "Inverter Temperature",
+        "id": "inverter_temperature",
+        "address": 93,
+        "register_type": "read",
+        "value_type": "U_WORD",
+        "scale": 0.1,
+        "unit": "°C",
+        "device_class": "temperature",
+        "state_class": "measurement",
+        "icon": "mdi:thermometer",
+        "entity_category": "diagnostic",
+        "note": "Confirmed: 21°C cold start, 37.8°C at noon. Protocol v3.14 maps IR93 as fault record but V0.50 uses it for temperature."
+      },
+      {
+        "name": "Modbus Version",
+        "id": "modbus_version",
+        "address": 73,
+        "register_type": "holding",
+        "value_type": "U_WORD",
+        "scale": 1,
+        "unit": "",
+        "icon": "mdi:protocol",
+        "entity_category": "diagnostic",
+        "note": "Modbus protocol version. This device: 50 = V0.50 (early firmware, pre-V2.08 address shift). Affects register layout for AC output (at IR36-39, not IR11-15)."
+      }
+    ],
+    "numbers": [
+      {
+        "name": "Modbus Unlock",
+        "id": "modbus_unlock",
+        "address": 0,
+        "register_type": "holding",
+        "value_type": "U_WORD",
+        "scale": 1,
+        "unit": "",
+        "min_value": 0,
+        "max_value": 1,
+        "step": 1,
+        "icon": "mdi:lock-open-variant",
+        "entity_category": "config",
+        "note": "Must write 1 before any holding register write"
+      },
+      {
+        "name": "Active Power Rate",
+        "id": "active_power_rate",
+        "address": 3,
+        "register_type": "holding",
+        "value_type": "U_WORD",
+        "scale": 1,
+        "unit": "%",
+        "min_value": 0,
+        "max_value": 100,
+        "step": 1,
+        "icon": "mdi:percent",
+        "entity_category": "config",
+        "note": "APR curtailment 0-100%. HR3 (FC03) — different space from IR3 (FC04, PV1 Voltage)."
+      }
+    ],
+    "switches": [
+      {
+        "name": "Save Modbus Write",
+        "id": "save_modbus_write",
+        "address": 1044,
+        "register_type": "holding",
+        "value_type": "U_WORD",
+        "on_value": 1,
+        "icon": "mdi:content-save",
+        "entity_category": "config",
+        "note": "Momentary write to persist current holding register settings to inverter EEPROM"
+      }
+    ],
+    "selects": []
+  },
+  "notes": {
+    "modbus_version": "This device runs Modbus V0.50 (HR73=50), which predates the Growatt V2.08 register address shift (2012-04-28). AC output registers are at IR36-39, NOT at IR11-15 as in v3.14 protocol spec.",
+    "ac_register_fix_2026-03-12": "Physical RS485 scan confirmed: IR37=Fac(50Hz), IR38=Vac(240V), IR39=Iac. Previous mapping (ac_freq@IR38, ac_volt@IR35) was wrong.",
+    "grid_registers_ir13_15": "IR13-15 (Fac/Vac1/Iac1 per v3.14) return 0 on this V0.50 device — not implemented in this firmware generation.",
+    "scale_factor": "Most registers: scale 0.1. AC Frequency: 0.01. Inverter Status: 1.",
+    "address_3_dual_use": "Address 3 in input space (IR3, FC04) = PV1 Voltage. Address 3 in holding space (HR3, FC03) = Active Power Rate. Standard Modbus, no conflict.",
+    "save_register_1044": "HR1044: momentary write (value=1) persists all holding registers to EEPROM. Trigger after APR changes.",
+    "pv_power_address": "pv_power uses IR2 (U_WORD, single MPPT). Previous mapping used IR1 as DWORD high word which would be 0. IR2 confirmed: raw=5400 → 540W at noon."
+  }
+}

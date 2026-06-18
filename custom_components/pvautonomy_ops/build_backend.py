@@ -63,6 +63,7 @@ from .const import (
     SIMULATED_FAILURE_NONE,
     SIMULATED_FAILURE_TIMEOUT,
 )
+from .defs_paths import read_defs_version
 from .secret_envelope import (
     BuildBackendKeysetCache,
     EnvelopeRequestContext,
@@ -1754,6 +1755,13 @@ class ProxyRemoteBuildBackend(BuildBackend):
         if yaml_content:
             yaml_hash = hashlib.sha256(yaml_content.encode()).hexdigest()
             payload["payload"]["yaml_hash"] = yaml_hash
+            # P2-b2: record the bundled defs version next to yaml_hash for
+            # traceability (the YAML was generated from these bundled defs).
+            # Omitted when unavailable (read_defs_version never raises); the
+            # runner ignores the key until P3 wires the full C3 manifest.
+            defs_version = read_defs_version()
+            if defs_version:
+                payload["payload"]["defs_version"] = defs_version
             if self._force_rebuild:
                 _LOGGER.info(
                     "force_rebuild requested: yaml_authority contract kept "

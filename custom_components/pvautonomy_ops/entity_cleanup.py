@@ -25,6 +25,8 @@ from pathlib import Path
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from .defs_paths import DefsNotFoundError, resolve_registry_root
+
 _LOGGER = logging.getLogger(__name__)
 
 # Regex to extract device prefix from entity object_id.
@@ -408,9 +410,8 @@ _REGISTRY_DOMAIN_MAP: dict[str, str] = {
     "selects": "select",
 }
 
-# Paths tried in order when resolving the inverter-registry root.
-_LOCAL_REGISTRY = Path("inverter-registry")
-_SERVER_REGISTRY = Path("/config/inverter-registry")
+# Registry root is resolved by the shared resolver (bundle-first, /config D8
+# fallback) — see defs_paths.py.
 
 
 def load_guardrail_candidates(
@@ -616,8 +617,9 @@ def _resolve_registry_path(
         p = registry_root / registry_file
         return p if p.is_file() else None
 
-    for base in (_LOCAL_REGISTRY, _SERVER_REGISTRY):
-        p = base / registry_file
-        if p.is_file():
-            return p
-    return None
+    try:
+        root = resolve_registry_root()
+    except DefsNotFoundError:
+        return None
+    p = root / registry_file
+    return p if p.is_file() else None

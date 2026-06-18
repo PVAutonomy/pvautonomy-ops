@@ -1,0 +1,89 @@
+{
+  "version": "1.0.0",
+  "updated": "2025-12-31",
+  "manufacturers": [
+    {
+      "id": "growatt",
+      "name": "Growatt",
+      "series": [
+        {
+          "id": "sph",
+          "name": "SPH Series (Hybrid Battery)",
+          "models": ["sph4000", "sph5000", "sph6000", "sph8000", "sph10000"],
+          "registry_file": "growatt/sph/sph10k.json"
+        },
+        {
+          "id": "mic",
+          "name": "MIC Series (Micro Inverter)",
+          "models": ["mic600", "mic1000", "mic1500", "mic2000", "mic2500", "mic3000", "mic3300"],
+          "registry_file": "growatt/mic/mic600.json"
+        }
+      ]
+    },
+    {
+      "id": "huawei",
+      "name": "Huawei",
+      "series": [
+        {
+          "id": "sun2000",
+          "name": "SUN2000 Series",
+          "models": ["sun2000-3k", "sun2000-4k", "sun2000-5k", "sun2000-6k", "sun2000-8k", "sun2000-10k"],
+          "registry_file": "huawei/sun2000/sun2000.json",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "solaredge",
+      "name": "SolarEdge",
+      "series": [
+        {
+          "id": "se",
+          "name": "SE Series",
+          "models": ["se3000", "se4000", "se5000", "se6000", "se7600", "se10000"],
+          "registry_file": "solaredge/se/se.json",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "sungrow",
+      "name": "Sungrow",
+      "series": [
+        {
+          "id": "sh",
+          "name": "SH Series (Hybrid)",
+          "models": ["sh5rt", "sh6rt", "sh8rt", "sh10rt"],
+          "registry_file": "sungrow/sh/sh-rt.json",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "fronius",
+      "name": "Fronius",
+      "series": [
+        {
+          "id": "primo",
+          "name": "Primo Series",
+          "models": ["primo-3.0", "primo-3.6", "primo-4.0", "primo-4.6", "primo-5.0", "primo-6.0", "primo-8.2"],
+          "registry_file": "fronius/primo/primo.json",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "goodwe",
+      "name": "GoodWe",
+      "series": [
+        {
+          "id": "et",
+          "name": "ET Series (Hybrid)",
+          "models": ["et5", "et6", "et8", "et10", "et15", "et16", "et20"],
+          "registry_file": "goodwe/et/et.json",
+          "status": "planned"
+        }
+      ]
+    }
+  ]
+}

@@ -28,6 +28,12 @@ import asyncio
 
 from homeassistant.core import HomeAssistant
 
+from .defs_paths import (
+    BUNDLED_REGISTRY_ROOT,
+    DefsNotFoundError,
+    resolve_registry_root,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 # Serialise concurrent dashboard creation attempts (avoid duplicate entries)
@@ -279,8 +285,7 @@ def _make_vertical_stack(cards: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-_LOCAL_REGISTRY = Path("inverter-registry")
-_SERVER_REGISTRY = Path("/config/inverter-registry")
+# Registry root resolved by the shared resolver — see defs_paths.py.
 
 
 def _control_sort_key(entity: tuple[str, str]) -> tuple[int, str]:
@@ -783,12 +788,15 @@ def _resolve_mode_soc_map(
 def _find_registry_root() -> Path:
     """Find the inverter-registry root directory.
 
-    Same strategy as yaml_generator.py: prefer local repo path,
-    fall back to /config/ for Home Assistant OS installs.
+    Delegates to the shared resolver (bundle-first, /config D8 fallback). When
+    nothing resolves, returns the bundled root (which may not exist) so the
+    caller's own ``.exists()`` check raises an actionable error — matching the
+    previous "return a path, caller checks" contract.
     """
-    if _LOCAL_REGISTRY.exists():
-        return _LOCAL_REGISTRY
-    return _SERVER_REGISTRY
+    try:
+        return resolve_registry_root()
+    except DefsNotFoundError:
+        return BUNDLED_REGISTRY_ROOT
 
 
 def load_registry(registry_file: str) -> dict[str, Any]:

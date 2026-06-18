@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PVAutonomy/pvautonomy-config/blob/main/schema/defs-manifest-schema.json",
+  "title": "PVAutonomy firmware-defs manifest",
+  "description": "Validation schema for the firmware-definition bundle manifest (the single versioned unit P2 pins and bundles into the integration release, and which sources the ADR-0001 C3 manifest 'defs version'). The manifest file itself (defs-manifest.json) is introduced in ADR-0001 P1-b; this schema is authored ahead of it in P1-a. DATA only; the generator stays integration code (ADR-0001 D3).",
+  "type": "object",
+  "required": ["defs_version", "schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "defs_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Single semver for the whole firmware-defs bundle (base + registry + schema). The C3-traceable 'defs version'."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version of the inverter-registry schema the bundled registry data validates against."
+    },
+    "base_version": {
+      "type": "string",
+      "description": "Version/identifier of the bundled ESPHome base templates."
+    },
+    "registry_index_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version carried by inverter-registry/index.json."
+    },
+    "esphome_min_version": {
+      "type": "string",
+      "description": "Minimum ESPHome version the bundled base requires (D-ADDON-BASELINE-SEC-001, e.g. \"2025.12.0\")."
+    },
+    "generated": {
+      "type": "string",
+      "description": "ISO-8601 date/time the manifest was produced (stamped by the release process)."
+    },
+    "source": {
+      "type": "string",
+      "description": "Provenance pointer (repo + ref) the bundle was pinned from."
+    },
+    "description": { "type": "string" }
+  }
+}

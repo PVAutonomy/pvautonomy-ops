@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PVAutonomy/pvautonomy-config/blob/main/schema/inverter-registry-schema.json",
+  "title": "PVAutonomy Inverter Registry — model definition",
+  "description": "Validation schema for a single inverter-model register-definition file (e.g. inverter-registry/growatt/sph/sph10k.json). Authored under ADR-0001 P1-a to back the existing \"$schema\" references in the registry data. Definition DATA only; the YAML generator stays integration code (ADR-0001 D3).",
+  "type": "object",
+  "required": ["manufacturer", "model", "series", "protocol", "registers"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Relative pointer to this schema (editor/CI convenience)."
+    },
+    "manufacturer": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "series": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "nominal_ac_power_w": { "type": "number", "exclusiveMinimum": 0 },
+    "protocol": { "$ref": "#/$defs/protocol" },
+    "features": { "$ref": "#/$defs/features" },
+    "known_issues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/knownIssue" }
+    },
+    "registers": { "$ref": "#/$defs/registers" },
+    "notes": { "$ref": "#/$defs/notes" }
+  },
+  "$defs": {
+    "protocol": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "slave_id": { "type": "integer", "minimum": 0 },
+        "baud_rate": { "type": "integer", "minimum": 1 },
+        "data_bits": { "type": "integer", "minimum": 1 },
+        "parity": { "type": "string" },
+        "stop_bits": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "features": {
+      "type": "object",
+      "description": "Model capability flags (e.g. battery_storage) and counts (e.g. pv_strings, phases).",
+      "additionalProperties": { "type": ["boolean", "integer"] }
+    },
+    "knownIssue": {
+      "type": "object",
+      "required": ["id", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "severity": { "type": "string" },
+        "description": { "type": "string" },
+        "follow_up": { "type": "string" },
+        "discovered": { "type": "string" },
+        "affected_registers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "mitigation": { "type": "string" },
+        "version_dependency": { "type": "string" }
+      }
+    },
+    "registers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sensors": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } },
+        "numbers": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } },
+        "switches": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } },
+        "selects": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } },
+        "binary_sensors": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/registerEntry" } }
+      }
+    },
+    "registerEntry": {
+      "type": "object",
+      "description": "One Modbus register mapping. Common fields apply across sensors/numbers/switches/selects; type-specific fields (min/max/step for numbers, on/off_value for switches, options for selects) are optional.",
+      "required": ["name", "id", "address", "register_type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Language-neutral entity id (D-ADDON-I18N-001)."
+        },
+        "address": { "type": "integer", "minimum": 0 },
+        "register_type": { "type": "string", "enum": ["read", "holding"] },
+        "value_type": {
+          "type": "string",
+          "enum": ["U_WORD", "S_WORD", "U_DWORD", "S_DWORD"]
+        },
+        "scale": { "type": "number" },
+        "unit": { "type": "string" },
+        "icon": { "type": "string" },
+        "device_class": { "type": "string" },
+        "state_class": {
+          "type": "string",
+          "enum": ["measurement", "total", "total_increasing"]
+        },
+        "entity_category": { "type": "string", "enum": ["diagnostic", "config"] },
+        "accuracy_decimals": { "type": "integer", "minimum": 0 },
+        "category": { "type": "string" },
+        "dashboard_section": { "type": "string" },
+        "note": { "type": "string" },
+        "note_version": { "type": "string" },
+        "enabled_by_default": { "type": "boolean" },
+        "tier": { "type": "string", "enum": ["standard", "extended", "unsafe"] },
+        "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+        "generator_skip": {
+          "type": "boolean",
+          "description": "Hard block: entity is never emitted regardless of tier (ADR-0001 D3 generator honours this flag)."
+        },
+        "read_only": { "type": "boolean" },
+        "known_limitation": { "type": "string" },
+        "min_modbus_version": { "type": "integer", "minimum": 0 },
+        "min_value": { "type": "number" },
+        "max_value": { "type": "number" },
+        "step": { "type": "number", "exclusiveMinimum": 0 },
+        "on_value": { "type": "integer" },
+        "off_value": { "type": "integer" },
+        "skip_updates": { "type": "integer", "minimum": 0 },
+        "options": {
+          "type": "object",
+          "description": "Raw-value -> human label map (selects, or read-only mode sensors).",
+          "additionalProperties": { "type": "string" }
+        },
+        "write_precondition": { "type": "string" },
+        "write_policy": { "$ref": "#/$defs/writePolicy" },
+        "liability_warning": { "type": "string" },
+        "derived_watt_sensor": { "$ref": "#/$defs/derivedSensor" }
+      }
+    },
+    "writePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requires_unlock": { "type": "boolean" },
+        "requires_explicit_enable": { "type": "boolean" },
+        "note": { "type": "string" }
+      }
+    },
+    "derivedSensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "name": { "type": "string" },
+        "icon": { "type": "string" }
+      }
+    },
+    "notes": {
+      "type": "object",
+      "description": "Free-form documentation map (key -> note text). Not consumed by the generator.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

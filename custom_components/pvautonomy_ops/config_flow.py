@@ -1257,19 +1257,24 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             # Map raw exceptions to user-friendly messages (DE/EN)
             raw = str(exc)
+            # P2-c (ADR-0001): firmware definitions ship WITH the integration —
+            # never instruct the customer to provision/check a /config file.
+            # Definition-related failures point to update/reinstall instead.
+            defs_hint = (
+                "The firmware definitions shipped with the PVAutonomy "
+                "integration appear to be incomplete or invalid. Update or "
+                "reinstall the integration (HACS or installer add-on) and try "
+                "again. No manual file under /config is required.\n"
+                "Die mit der PVAutonomy-Integration gelieferten "
+                "Firmware-Definitionen sind unvollständig oder ungültig. "
+                "Aktualisieren oder installieren Sie die Integration (HACS oder "
+                "Installer-Add-on) neu. Eine manuelle Datei unter /config ist "
+                "nicht erforderlich."
+            )
             if "NoneType" in raw and ("subscriptable" in raw or "attribute" in raw):
-                self._flash_error = (
-                    "Internal error: production base YAML has missing or empty "
-                    "sections (api/encryption/logger). "
-                    "Check edge101-production-base.yaml on the server.\n"
-                    "Interner Fehler: Produktions-Basis-YAML hat fehlende "
-                    "Abschnitte. Prüfe edge101-production-base.yaml."
-                )
+                self._flash_error = defs_hint
             elif "YAML" in raw and "parse" in raw.lower():
-                self._flash_error = (
-                    f"YAML parse error in base config: {raw}\n"
-                    "Check edge101-production-base.yaml for syntax errors."
-                )
+                self._flash_error = defs_hint
             elif "Build already in progress" in raw:
                 self._flash_error = (
                     "A firmware build is already running for this device. "
@@ -1282,6 +1287,15 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "mehrfach neu. Wenn die Meldung weiter erscheint, "
                     "kontaktieren Sie den Support."
                 )
+            elif (
+                "production base not found" in raw.lower()
+                or "registry file not found" in raw.lower()
+                or "firmware-definition" in raw.lower()
+            ):
+                # A missing/unresolved bundled definition — never surface the
+                # raw /config path (incl. the resolver's DefsNotFoundError which
+                # lists legacy /config locations); point to update/reinstall.
+                self._flash_error = defs_hint
             elif "not found" in raw.lower():
                 self._flash_error = raw
             elif "Invalid mac_suffix" in raw:
