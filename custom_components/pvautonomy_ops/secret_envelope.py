@@ -36,13 +36,17 @@ from typing import Any, Final, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from pyhpke import (
+# pyhpke is vendored under ._vendor (not a manifest requirement): its published
+# metadata pins cryptography<47, which is unsatisfiable against HA Core's bundled
+# cryptography==48. The cap is defensive only; the code runs on cryptography 48.
+# See _vendor/__init__.py and issue #94.
+from ._vendor.pyhpke import (
     AEADId,
     CipherSuite,
     KDFId,
     KEMId,
 )
-from pyhpke.exceptions import OpenError, PyHPKEError, SealError
+from ._vendor.pyhpke.exceptions import OpenError, PyHPKEError, SealError
 
 
 # ---------------------------------------------------------------------------
