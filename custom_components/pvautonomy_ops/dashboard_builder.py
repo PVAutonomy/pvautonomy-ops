@@ -788,9 +788,9 @@ def _resolve_mode_soc_map(
 def _find_registry_root() -> Path:
     """Find the inverter-registry root directory.
 
-    Delegates to the shared resolver (bundle-first, /config D8 fallback). When
-    nothing resolves, returns the bundled root (which may not exist) so the
-    caller's own ``.exists()`` check raises an actionable error — matching the
+    Delegates to the shared resolver (bundle-only, fail-closed). When
+    the bundle is absent, raises :class:`DefsNotFoundError` via the resolver
+    before this function returns — matching the
     previous "return a path, caller checks" contract.
     """
     try:

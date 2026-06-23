@@ -4,19 +4,47 @@ After installation, configure PVAutonomy to build and flash firmware for your Ed
 
 ## Installation
 
-For the current deployment cycle, `pvautonomy_ops` is installed as a **local custom component** bundled into the customer master image at `/config/custom_components/pvautonomy_ops/`.
+`pvautonomy_ops` 0.4.16 ships through two supported paths (both deliver the same
+release artifact — see [Installation](INSTALLATION.md)):
 
-HACS is **not required for installing `pvautonomy_ops`** in this cycle. HACS-based distribution of `pvautonomy_ops` is the planned product direction and will be validated separately. Note that the broader master image may still use HACS for other components (frontend cards, third-party integrations).
+- **Customer / app path:** the PVAutonomy Installer/Updater add-on (`stable`
+  channel). No HACS required.
+- **Developer / HACS path:** HACS custom repository `PVAutonomy/pvautonomy-ops`
+  (Integration category, `stable`).
+
+Both paths are validated. Firmware definitions are bundled in the integration
+release under `data/firmware_defs/**`; no `/config/inverter-registry` or
+`/config/esphome` files are needed.
 
 ## Preflight Checklist
 
 Before your first build, verify these items:
 
-- [ ] **Proxy API key ready:** You have a key starting with `pva_` (40 hex characters). This key is **required** before starting the wizard — obtain it from your PVAutonomy provider before the system is set up.
+- [ ] **Proxy API key ready:** You have a PVAutonomy Managed Build Service API key (shown as `pva_...`). This key is **required** before starting the wizard — obtain it from your PVAutonomy provider before the system is set up. It is **not** the same thing as the `COMPILE_SECRET_KEY` (a separate, operator-/provider-provisioned secret; see below).
 - [ ] **Proxy reachable:** Open `https://pvautonomy-proxy.pvautonomy-proxy.workers.dev/health` in a browser. You should see `{"status":"ok",...}`.
 - [ ] **Customer ID:** Leave empty — it is automatically derived from your installation. Only set if your provider explicitly gives you a specific one.
 - [ ] **Edge101 online:** Your device is powered on and visible in Settings > Devices & Services > ESPHome.
 - [ ] **Expected build time:** A firmware build takes **8-10 minutes** (GitHub Actions). The first build may take slightly longer.
+
+## Setup flow at a glance
+
+1. Install the integration via the Installer/Updater add-on **or** HACS
+   (see [Installation](INSTALLATION.md)).
+2. Enter your Managed Build Service API key (`pva_...`) in the wizard.
+3. The integration calls the proxy's `/whoami` endpoint, authenticated by that
+   key.
+4. Your `customer_id` is **derived server-side** from the key — you do not set
+   or need to know it.
+5. Leave **Customer ID** empty (only set it if your provider gives you a
+   specific one).
+6. Select your Edge101 device.
+7. Builds run through `proxy_remote`; each build request carries provenance and
+   integrity metadata (`defs_version`, `yaml_hash`) automatically.
+8. `COMPILE_SECRET_KEY` is a **separate** secret, provisioned out-of-band by
+   your provider/operator — it is **not** the `pva_...` API key and there is no
+   in-product self-service onboarding for it today. See
+   [COMPILE-SECRET-KEY-PROVISIONING.md](COMPILE-SECRET-KEY-PROVISIONING.md) and
+   [Security](SECURITY.md).
 
 ## Open Options
 

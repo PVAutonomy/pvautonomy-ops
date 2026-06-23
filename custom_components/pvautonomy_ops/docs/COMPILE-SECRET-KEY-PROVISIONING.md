@@ -1,22 +1,99 @@
 # Provisioning the compile_secret_key (operator runbook)
 
+## Purpose and audience
+
+This is an **operator / beta runbook**, not a customer self-service guide. The
+`compile_secret_key` is currently **provider- / operator-provisioned**; there
+is no in-product self-service onboarding for it today (customer-friendly
+onboarding is tracked as a follow-up).
+
 `compile_secret_key` is the repo-wide **AES-256** key (64 hex / 32 bytes) that
 Home Assistant uses to AES-256-GCM-encrypt the per-build compile secrets
-(api encryption key + OTA password) before they are sent to the proxy. The
-GitHub Actions firmware-build workflow decrypts them with the **matching**
-repository secret.
+(per-device API encryption key + OTA password) before they are sent to the
+proxy. The GitHub Actions firmware-build workflow decrypts them with the
+**matching** repository secret.
 
 > The key value is sensitive. Treat it like a private key. It must never be
-> committed, pasted into chat, screen-shared, or logged. This integration only
-> ever logs a non-secret `sha256(key)[:8]` fingerprint.
+> committed, pasted into chat or issues, screen-shared, or logged. This
+> integration only ever logs a non-secret `sha256(key)[:8]` fingerprint.
+
+## Current architecture (pvautonomy_ops 0.4.16)
+
+Context for where this key fits in the current build model:
+
+- Builds run through the **`proxy_remote`** backend (HA → proxy → GitHub
+  Actions); Home Assistant never holds a GitHub PAT.
+- Customer identity is **server-derived via `/whoami`** from the authenticated
+  `pva_...` Managed Build Service API key — the client does not assert it.
+- Firmware definitions are **bundled in the integration release** under
+  `data/firmware_defs/**`. `/config/inverter-registry` and `/config/esphome`
+  are **no longer** product API or distribution paths.
+- `defs_version` is sent as a **provenance** metadatum for the bundled defs;
+  `yaml_hash` is the **integrity binding** so the runner compiles exactly the
+  YAML the integration generated, byte-for-byte.
+- `manifest.json` declares `requirements = []`; `pyhpke` is **vendored**
+  in-tree. The vendored `pyhpke` backs the HPKE envelope code, which is present
+  but **not active today** (see *Crypto model*).
+
+See `SECURITY.md` in this directory for the customer-facing security overview.
+
+## Key roles and separation
+
+These are distinct secrets/values — do **not** conflate them:
+
+| Name | What it is | Where it lives | Customer-visible? |
+|------|------------|----------------|-------------------|
+| `pva_...` Managed Build Service API key | Authenticates this installation to the proxy; build/status/artifact scope only | HA integration options | Provisioned out-of-band by provider |
+| `compile_secret_key` (HA-stored) | Repo-wide AES-256 key HA uses to encrypt per-build compile secrets | `PVAutonomyKeyring` (HA Store) only | No — operator-provisioned |
+| GitHub Actions secret `COMPILE_SECRET_KEY` | The **matching** value the build workflow decrypts with | GHA repository secret (backend) | No — backend detail |
+| per-device API encryption key | ESPHome API encryption key compiled into one device's firmware | Inside the device firmware | No |
+| per-device OTA password | OTA auth secret compiled into one device's firmware | Inside the device firmware | No |
+| `defs_version` | Provenance of the bundled firmware definitions | Build payload metadata | Non-secret |
+| `yaml_hash` | Integrity binding of the generated YAML | Build payload metadata | Non-secret |
+
+The HA-stored `compile_secret_key` and the GHA `COMPILE_SECRET_KEY` repository
+secret are **two copies of the same value on two sides**. The `pva_...` API key
+and the per-device secrets are unrelated to it.
 
 ## Hard requirement
 
+The operative path today is **Legacy AES-256-GCM**. For it:
+
 The value provisioned into Home Assistant **must byte-for-byte equal** the
-GitHub Actions repository secret `COMPILE_SECRET_KEY` in
-`PVAutonomy/inverter-registry`. If they differ, every build fails to decrypt
-(`InvalidTag`). Provision the GHA repo secret **out-of-band** (GitHub →
-Settings → Secrets and variables → Actions) using the same value.
+GitHub Actions repository secret `COMPILE_SECRET_KEY`. Provision the GHA repo
+secret **out-of-band** (GitHub → Settings → Secrets and variables → Actions)
+using the same value.
+
+- The repository that holds this GHA secret (`PVAutonomy/inverter-registry`) is
+  a **backend implementation detail** — not a customer or product API path.
+  Operators/customers do not interact with that repo as a product surface.
+- If the two values differ, every build fails to decrypt (`InvalidTag`).
+- If no valid 64-hex key is provisioned, the build **fails closed before the
+  `/build` POST** — no plaintext compile secret is ever transmitted.
+
+## Crypto model
+
+**Operative path today — Legacy AES-256-GCM:**
+
+- Repo-wide key, 64 hex / 32 bytes.
+- Home Assistant encrypts the per-build compile secrets HA-side before they
+  leave HA.
+- The proxy forwards the encrypted blob unchanged; the GitHub Actions workflow
+  decrypts it with the matching `COMPILE_SECRET_KEY` repo secret.
+- This is the **default** and currently the only live secret-bearing path.
+
+**Forward path — HPKE `compile_secret_envelope` (gated, not active today):**
+
+- The HPKE envelope code exists in the integration as a **gated,
+  forward-compatible mechanism**. It is **not** the active customer path today.
+- Activating it requires both a **pinned production root anchor** and a
+  **proxy keyset endpoint**. Today: no pinned production root is shipped, and
+  no proxy keyset route is deployed. The proxy can validate and forward a
+  `compile_secret_envelope`, but the integration cannot produce one in
+  production until both prerequisites exist.
+- This runbook will need to be updated **before** HPKE is activated (the
+  provisioning and hard-requirement sections change when the envelope path
+  goes live).
 
 ## Safe provisioning procedure
 
@@ -45,23 +122,29 @@ Settings → Secrets and variables → Actions) using the same value.
    (`python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode('ascii')).hexdigest()[:8])" <KEY>`,
    run on a trusted host). Never compare raw key bytes through HA.
 
-## If the key is exposed (logs, screen share, trace, clipboard, etc.)
+## Rotation / compromise response
 
-Treat it as compromised and rotate **both sides**:
+If the key is exposed (logs, screen share, trace, clipboard, etc.), treat it as
+compromised and rotate **both sides**:
 
 1. `pvautonomy_ops.clear_compile_secret_key` (HA stops sending secrets;
    builds fail closed).
-2. Rotate the GitHub Actions `COMPILE_SECRET_KEY` repo secret to a new value.
+2. Rotate the GitHub Actions `COMPILE_SECRET_KEY` repo secret (backend) to a
+   new value.
 3. Re-provision the new value into HA via `set_compile_secret_key` (steps
    above).
-4. Because per-device api/OTA secrets are compiled into firmware, also rotate
-   and reflash any device whose secrets were exposed (tracked separately as
-   the device-rotation task; e.g. `2eb1e4` under
-   `TASK-20260520-EPIC006-COMPILE-SECRETS-PROTOCOL-LOG-EXPOSURE`).
+4. Because per-device API/OTA secrets are compiled into firmware, also rotate
+   and reflash any device whose secrets were exposed (tracked separately as the
+   device-secret-rotation task; internal tracking reference only).
 
-## Notes
+## Notes / limitations
 
-- Storage: the key lives only in `PVAutonomyKeyring` (HA Store), never in a
+- **Storage:** the key lives only in `PVAutonomyKeyring` (HA Store), never in a
   config/options field, env var, or `secrets.yaml` reference.
-- Without a provisioned key, secret-bearing proxy builds **fail closed**
-  before the build request is sent — no plaintext secret is transmitted.
+- **Fail-closed:** without a provisioned key, secret-bearing proxy builds fail
+  closed before the build request is sent — no plaintext secret is transmitted.
+- **Access:** installing the open-source integration via HACS does **not** by
+  itself grant Managed Build Service access; that needs a valid `pva_...` key.
+- **Onboarding:** customer-friendly onboarding for both the `pva_...` API key
+  and `compile_secret_key` is a planned follow-up — do not assume self-service
+  provisioning exists today.

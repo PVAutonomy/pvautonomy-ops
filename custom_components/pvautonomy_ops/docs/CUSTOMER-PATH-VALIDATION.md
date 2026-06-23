@@ -1,5 +1,13 @@
 # Customer Path Validation
 
+> **Reading note.** The P1 sections below (P1 … P1j, roughly up to v0.4.5) are
+> **historical validation notes from before bundle-first / P2-f**. They are kept
+> as the running record of that work. Where those older sections mention
+> `/config/inverter-registry` or `/config/esphome` as a registry/firmware-defs
+> path, that is **no longer the product path** — firmware definitions now ship
+> bundled in the integration release (`data/firmware_defs/**`). The current state
+> is documented at the end in **“v0.4.16 stable / P2-f validation”**.
+
 ## 2026-06-08 SPH Wizard/Firmware Proof Run
 
 ### Status
@@ -86,3 +94,69 @@
 - **Change (dashboard-only):** the P1i MIC special case (vertical-stack + `_build_mic_ac_current_card` markdown) is removed; MIC AC Current is a plain AC Output row again. `_SECTION_ROW_ORDER["AC Output"]` gains the MIC single-phase tokens (`ac_power`, `ac_frequency`, `ac_voltage`, `ac_current`), interleaved so SPH relative order is untouched (full-token matching prevents `ac_power` from capturing `ac_power_total`, etc.). No registry/generator change — the `accuracy_decimals: 1` path already exists end-to-end.
 - **Interim phase (explicit):** until the customer MIC600 firmware is rebuilt + installed via the Wizard (separate Customer-Path GO), the live entity keeps `suggested_display_precision: 0` and the native row rounds to `0 A`/`1 A`. This is a consciously accepted intermediate state; the firmware rebuild closes it (no dashboard change needed afterwards — refresh picks up the row automatically on the next install per P1).
 - Scope: `dashboard_builder.py` (remove P1i special case + MIC row order), `tests/test_dashboard_builder.py` (native-row + exact-order tests replace the markdown tests; SPH non-regression kept), this doc.
+
+---
+
+## v0.4.16 stable / P2-f validation
+
+This section supersedes the historical P1 notes above and reflects the current,
+bundle-first product path.
+
+### Release / channel state
+
+- `pvautonomy_ops` **v0.4.16** is stable/latest.
+- `pvautonomy-addons` `integration/stable.json` points at **0.4.16**.
+- `pvautonomy-addons` `integration/beta.json` points at **0.4.16** as well.
+- Stable channel validation: **PASS**.
+- Stable asset reachable: **HTTP 200**.
+- Stable asset SHA-256 was computed and **matches the published SHA**.
+- GitHub Release target commit was validated.
+- v0.4.15 remains **prerelease**.
+- v0.4.14 remains available as a **fallback**.
+
+### P2-f runtime evidence
+
+- Test system: **.120**, reached **by IP only** (never `homeassistant.local`).
+- Fresh / runtime validation: **PASS**.
+- Config flow: **PASS**.
+- `/whoami`: **PASS**.
+- `customer_id_missing`: **resolved**.
+- `pyhpke` / `cryptography` resolver issue: **resolved**.
+- `defs_version`: **accepted**.
+- `yaml_hash`: **accepted**.
+- Build backend: `proxy_remote`.
+- Build ID: `02a34a35-8acf-47a4-b47a-8b177f8917d6`.
+- Build result: **success**.
+- Firmware artifact produced, approximately **1.12 MB**.
+- **No OTA. No flash. No firmware upload.**
+- **No D8 warning** observed in normal operation.
+
+### Dual Install Validation (.120)
+
+**Customer / app path:**
+- PVAutonomy Installer/Updater add-on, `stable` channel, **0.4.16** — **PASS**.
+- No HACS involved.
+
+**Developer / HACS path:**
+- HACS custom repository `PVAutonomy/pvautonomy-ops`, Integration category,
+  `stable` **0.4.16** — **PASS**.
+- No Installer/add-on split-brain.
+
+**Both paths:**
+- Same release artifact, same SHA.
+- No `/config/inverter-registry` definitions needed.
+- No `/config/esphome` firmware definitions needed.
+- Firmware definitions bundled under `data/firmware_defs/**`.
+- No build / OTA / flash / upload in the dual-install test.
+- No secrets involved.
+
+### Current outcome
+
+- Customer delivery **no longer depends on** `/config/inverter-registry`.
+- Firmware definitions are delivered **bundle-first**.
+- HACS (`stable`) and the Installer/add-on (`stable`) deliver the **same
+  validated** state.
+- P2-f / stable promotion is **complete**.
+- Issues #66, #79, #94, #96, #97 are **closed**.
+- #92 remains **open** for the later D8-fallback code cleanup (mentioned here as
+  a follow-up only; no auto-close).

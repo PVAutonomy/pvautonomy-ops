@@ -22,9 +22,17 @@ More inverter models are being added to the registry.
 
 ### Where do I get my API key?
 
-Your PVAutonomy provider issues API keys **before** you set up the system. The key starts with `pva_` followed by 40 hex characters. You enter it in the setup wizard when adding the PVAutonomy integration.
+Your PVAutonomy provider issues the **Managed Build Service API key** (shown as
+`pva_...`) **before** you set up the system. You enter it in the setup wizard
+when adding the PVAutonomy integration.
 
-Without a valid API key the wizard cannot build firmware. Make sure you have your key ready before starting the setup.
+This key is separate from the `COMPILE_SECRET_KEY` (a different,
+operator-/provider-provisioned secret). Installing the integration — via the
+Installer/Updater add-on or HACS — does **not** by itself produce an API key;
+the provider issues it.
+
+Without a valid API key the wizard cannot build firmware. Make sure you have
+your key ready before starting the setup.
 
 ### What is the Customer ID?
 
@@ -32,7 +40,16 @@ A unique identifier for your installation. **Leave it empty** — it is automati
 
 ### Is HACS required for PVAutonomy?
 
-No. For the current deployment cycle, `pvautonomy_ops` is installed as a local custom component bundled into the system image. HACS is not required for installing or running PVAutonomy itself. HACS-based distribution of `pvautonomy_ops` is planned for a future release. The master image may still include HACS for other purposes (frontend cards, third-party integrations).
+It depends on the path you choose — both are supported and deliver the same
+0.4.16 release artifact:
+
+- **Normal customers:** no — the preferred path is the PVAutonomy
+  Installer/Updater add-on (`stable` channel), which does not use HACS.
+- **Developers / power-users:** HACS (`stable`) is supported, via the custom
+  repository `PVAutonomy/pvautonomy-ops`.
+
+(HACS distribution was previously described as planned; it is now live and
+validated.) See [Installation](INSTALLATION.md) for both paths.
 
 ### Can I use multiple Edge101 devices?
 
@@ -80,6 +97,8 @@ This means one or more expected entities are missing. Check:
 
 ### I see raw key names in the Options dialog
 
-Update to the latest version of PVAutonomy. Translation files were updated in v0.2.0+ to include all option labels.
+*(Historical — affects only very old builds.)* Update to the current version of
+PVAutonomy. Translation files were completed in v0.2.0+ to include all option
+labels; current releases (0.4.x) are unaffected.
 
 For more issues, see [Troubleshooting](TROUBLESHOOTING.md).

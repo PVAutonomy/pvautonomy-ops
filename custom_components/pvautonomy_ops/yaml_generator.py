@@ -124,7 +124,7 @@ def _effective_tier(selected_tier: str, map_confirmed: bool) -> str:
     return selected_tier
 
 # Firmware-definition data locations are resolved by the shared resolver
-# (bundle-first, /config D8 fallback) — see defs_paths.py.
+# (bundle-only, fail-closed) — see defs_paths.py.
 
 
 class YamlGenerationError(Exception):

@@ -410,8 +410,8 @@ _REGISTRY_DOMAIN_MAP: dict[str, str] = {
     "selects": "select",
 }
 
-# Registry root is resolved by the shared resolver (bundle-first, /config D8
-# fallback) — see defs_paths.py.
+# Registry root is resolved by the shared resolver (bundle-only, fail-closed)
+# — see defs_paths.py.
 
 
 def load_guardrail_candidates(

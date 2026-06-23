@@ -44,6 +44,25 @@ reaches `pvautonomy-ops` via this gate and a HACS release.
 - **Manifest:** per-file sha256 + source commit SHA + target repo + timestamp +
   mode.
 
+## What must / must not ship (current packaging)
+
+- **Must include `data/firmware_defs/**`.** Firmware definitions ship bundled in
+  the integration package; the export must carry them.
+- **Must not require `/config` defs.** The export must not assume
+  `/config/inverter-registry` or `/config/esphome` as product definition paths —
+  those are no longer customer/product distribution paths.
+- **Keep `manifest.json` `requirements = []` and vendored `pyhpke`.** The export
+  preserves the no-install-time-dependency posture: `requirements = []` stays
+  empty and `_vendor/pyhpke/**` (with its `LICENSE`) ships in-tree.
+- **Version is target-owned (not source-owned).** `const.py` `VERSION` in
+  `pvautonomy-config` is a placeholder/default (e.g. `0.3.0`) and is **not** the
+  release target version. The release version is set/verified in the
+  `pvautonomy-ops` target during release-prep (see `RELEASE-CHECKLIST.md`).
+- **Asset SHA-256 is the basis for channel pins.** The released
+  `pvautonomy-ops` asset's SHA-256 is what the `pvautonomy-addons`
+  `stable`/`beta` channel pins reference; compute and compare it during stable
+  promotion.
+
 ## Usage
 ```bash
 # Dry-run (default): manifest + scrub report, no writes.

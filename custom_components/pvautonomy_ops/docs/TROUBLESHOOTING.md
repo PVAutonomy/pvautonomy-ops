@@ -12,6 +12,87 @@
 | **Timeout** | Build exceeded 15 minutes | Retry the build. If it keeps timing out, the GitHub Actions runner may be overloaded. |
 | **Hash mismatch** | Firmware integrity check failed | **Do NOT flash.** Retry the build. If the issue persists, contact your provider. |
 
+## Version & setup errors (0.4.x)
+
+Most of the issues below were resolved at or before the `pvautonomy_ops` 0.4.16
+stable release. The first fix to try is almost always: **update to 0.4.16
+stable** (via the Installer/Updater add-on or HACS — both deliver the same
+release). See [Installation](INSTALLATION.md).
+
+### Install / startup fails: `pyhpke` / `cryptography` dependency conflict
+
+**Symptom:** Installation or Home Assistant startup fails with a `pyhpke` /
+`cryptography` resolver / dependency-conflict error. Older pre-0.4.16 builds
+could collide with the Home Assistant Core `cryptography` pin.
+
+**Fix:**
+- Update to `pvautonomy_ops` **0.4.16 stable**.
+- 0.4.16 declares `manifest.json` `requirements = []` and vendors `pyhpke`
+  in-tree, so there is no install-time `pyhpke` / `cryptography` resolution.
+- Do **not** pip-install `pyhpke` or `cryptography` manually.
+
+### `customer_id_missing` during setup or build
+
+**Symptom:** The config flow or a build aborts because `customer_id` is missing.
+
+**Fix:**
+- Confirm the current **0.4.16** version is installed.
+- Confirm your Managed Build Service API key (`pva_...`) is entered correctly in
+  the integration options.
+- The proxy's `/whoami` endpoint must be reachable.
+- `customer_id` is **derived server-side** from the API key — leave the Customer
+  ID field empty; do not try to set it manually.
+
+### `HTTP 400 payload.defs_version is not a known field`
+
+**Symptom:** A build request fails with HTTP 400 reporting an unknown
+`defs_version` field.
+
+**Fix:**
+- This was a proxy/version mismatch from before the final 0.4.16 stable state.
+- The current proxy accepts `defs_version` (sent as provenance metadata).
+- Use the current **stable channel (0.4.16)**.
+- If it recurs, check the proxy/service version — do **not** create local
+  `/config` firmware definitions as a workaround.
+
+### D8 fallback warning / `/config` firmware definitions
+
+**Symptom:** A warning about a "D8 fallback" or about firmware definitions under
+`/config`.
+
+**What it means:**
+- The normal customer path uses the **bundled** definitions under
+  `data/firmware_defs/**`. `/config/inverter-registry` and `/config/esphome` are
+  **no longer** product distribution paths.
+- A D8 warning is a **migration/legacy** hint, not a normal-path requirement.
+- Do **not** create `/config` definitions as a standard fix; running the current
+  bundled release is the supported path. (Removal of the D8 fallback is tracked
+  separately as a later code cleanup.)
+
+### `COMPILE_SECRET_KEY` missing or invalid
+
+**Symptom:** A secret-bearing build fails closed before the request is sent,
+citing a missing or invalid compile key.
+
+**Fix / notes:**
+- A missing/invalid `COMPILE_SECRET_KEY` causes the build to **fail closed
+  before the `/build` POST** — no plaintext secret is transmitted. This is by
+  design.
+- `COMPILE_SECRET_KEY` is **not** the same as the `pva_...` API key — it is a
+  separate secret, provisioned out-of-band by your provider/operator.
+- Verify it via the fingerprint-only status (`compile_secret_key_status`); never
+  compare raw key bytes, and never share the key in logs, screenshots, or chat.
+- Full procedure:
+  [COMPILE-SECRET-KEY-PROVISIONING.md](COMPILE-SECRET-KEY-PROVISIONING.md).
+
+### Wrong installation path / "where did my install go?"
+
+- **Customer / app path:** PVAutonomy Installer/Updater add-on (`stable`).
+- **Developer / HACS path:** HACS (`stable`).
+- Both deliver `pvautonomy_ops` 0.4.16. Installing via HACS or the add-on does
+  **not** by itself create a Managed Build Service API key — the provider issues
+  that separately.
+
 ## Common Issues
 
 ### Proxy unreachable
