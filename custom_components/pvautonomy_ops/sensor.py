@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -1242,6 +1243,7 @@ class PVAutonomyOpsWizardSensor(SensorEntity):
 
     _attr_name = "PVAutonomy Wizard"
     _attr_icon = "mdi:wizard-hat"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_should_poll = False  # Event-driven updates only
 
     def __init__(self, wizard_engine: WizardEngine, entry_id: str | None = None) -> None:

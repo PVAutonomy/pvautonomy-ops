@@ -168,7 +168,7 @@ class PVAutonomyPriorityModeToggleSwitch(SwitchEntity):
         self.entity_id = f"switch.{device_name}_{slug}_device"
         self._attr_unique_id = f"{device_name}_{slug}_device"
         self._attr_suggested_object_id = f"{device_name}_{slug}_device"
-        self._attr_name = "Activate"
+        self._attr_translation_key = slug
         self._attr_icon = icon
         self._attr_is_on = False
         self._attr_available = False
