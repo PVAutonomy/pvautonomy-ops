@@ -148,6 +148,7 @@ class PVAutonomyPriorityModeToggleSwitch(SwitchEntity):
     """Activation-only toggle for a confirmed priority mode."""
 
     _attr_entity_category = EntityCategory.CONFIG
+    _attr_has_entity_name = True
 
     def __init__(
         self,
