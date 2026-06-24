@@ -166,6 +166,14 @@
           "none": "Kein Gerät ausgewählt"
         }
       }
+    },
+    "switch": {
+      "load_first_activate": {
+        "name": "Load First aktivieren"
+      },
+      "battery_first_activate": {
+        "name": "Battery First aktivieren"
+      }
     }
   },
   "options": {

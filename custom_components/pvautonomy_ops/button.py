@@ -930,8 +930,7 @@ class PVAutonomyOpsRestartButton(ButtonEntity):
         self.hass = hass
         self.operation_runner = operation_runner
         self.input_reader = input_reader
-        if is_legacy:
-            self._attr_entity_registry_enabled_default = False
+        self._attr_entity_registry_enabled_default = False
 
         self._attr_extra_state_attributes = {
             "target_device": None,
