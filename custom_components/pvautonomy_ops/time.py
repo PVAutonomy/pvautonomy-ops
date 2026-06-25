@@ -23,7 +23,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import CONF_SELECTED_DEVICE, DOMAIN
-from .entity_cleanup import heal_grid_first_time_entities
+from .dashboard_builder import load_registry
+from .entity_cleanup import cleanup_unsupported_wrapper_entities, heal_grid_first_time_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +67,22 @@ async def async_setup_entry(
             "Skipping time entity setup for entry %s: selected device unavailable",
             entry.entry_id[:8],
         )
+        return
+
+    features = await _load_device_features(hass, entry)
+    has_battery = features.get("battery_storage", True)
+
+    if not has_battery:
+        _LOGGER.info(
+            "Skipping Grid First time entities for entry %s "
+            "(features.battery_storage=False, device=%s)",
+            entry.entry_id[:8],
+            device_name,
+        )
+        try:
+            cleanup_unsupported_wrapper_entities(hass, device_name, entry.entry_id)
+        except Exception:  # noqa: BLE001 — defensive: cleanup is best-effort
+            pass
         return
 
     try:
@@ -138,6 +155,36 @@ async def _resolve_selected_device_name(
             return None
 
     return None
+
+
+async def _load_device_features(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> dict:
+    """Load inverter registry features for this config entry.
+
+    Resolves the registry_file from device metadata, then loads the JSON and
+    returns the ``features`` section.  Fails open: on any error returns ``{}``
+    so an unknown/unresolvable device behaves like a battery-capable device
+    (avoids accidentally hiding entities from SPH10K during startup races).
+    """
+    try:
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        metadata_store = entry_data.get("metadata_store")
+        ha_device_id = entry.options.get("ha_device_id") or entry.data.get("ha_device_id")
+        if metadata_store is None or not ha_device_id:
+            return {}
+        registry_file: str | None = None
+        for metadata in await metadata_store.get_all():
+            if metadata.ha_device_id == ha_device_id:
+                registry_file = getattr(metadata, "registry_file", None)
+                break
+        if not registry_file:
+            return {}
+        registry = await hass.async_add_executor_job(load_registry, registry_file)
+        return registry.get("features", {})
+    except Exception:  # noqa: BLE001 — fail-open: unknown device → battery-like
+        return {}
 
 
 def _encode_time_to_register(value: dt_time) -> int:

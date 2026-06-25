@@ -339,6 +339,73 @@ def heal_grid_first_time_entities(
     return delete_entities(hass, stale_ids)
 
 
+# ── Non-battery wrapper cleanup (Issue #108) ─────────────────────
+
+
+def find_unsupported_wrapper_entities(
+    hass: HomeAssistant,
+    device_name: str,
+    config_entry_id: str | None = None,
+) -> list[str]:
+    """Find unsupported priority/grid-first wrapper entities for non-battery devices.
+
+    Checks for stale or newly-blocked control wrapper entities that must not
+    exist for devices where ``features.battery_storage`` is False (e.g. MIC600).
+    Also includes the retired ``export_limit_toggle_device`` orphan.
+
+    Only entities with ``platform == 'pvautonomy_ops'`` are considered;
+    entities from other integrations with coincidentally matching IDs are left
+    untouched.
+
+    Idempotent and safe to call even when no stale entities are present.
+    """
+    entity_reg = er.async_get(hass)
+    candidate_ids = [
+        f"switch.{device_name}_load_first_activate_device",
+        f"switch.{device_name}_battery_first_activate_device",
+        f"switch.{device_name}_grid_first_schedule_enabled_draft",
+        f"time.{device_name}_grid_first_timeslot_1_start_time",
+        f"time.{device_name}_grid_first_timeslot_1_stop_time",
+        f"switch.{device_name}_export_limit_toggle_device",  # retired orphan
+    ]
+    found: list[str] = []
+    for entity_id in candidate_ids:
+        entry = entity_reg.async_get(entity_id)
+        if entry is None:
+            continue
+        if entry.platform != "pvautonomy_ops":
+            continue
+        found.append(entity_id)
+    return found
+
+
+def cleanup_unsupported_wrapper_entities(
+    hass: HomeAssistant,
+    device_name: str,
+    config_entry_id: str | None = None,
+) -> CleanupResult:
+    """Delete stale unsupported wrapper entities for non-battery devices.
+
+    Removes priority-mode and grid-first control wrapper entities that must
+    not exist when ``features.battery_storage`` is False (e.g. MIC600).
+    Also removes the retired ``export_limit_toggle_device`` orphan if present.
+
+    Idempotent: safe to call multiple times; entities already removed
+    produce no error.
+    """
+    stale_ids = find_unsupported_wrapper_entities(hass, device_name, config_entry_id)
+    if not stale_ids:
+        return CleanupResult()
+    result = delete_entities(hass, stale_ids)
+    _LOGGER.info(
+        "Non-battery wrapper cleanup: deleted=%d, errors=%d (device=%s)",
+        result.deleted_count,
+        len(result.errors),
+        device_name,
+    )
+    return result
+
+
 # ── Report (R4) ──────────────────────────────────────────────────
 
 
