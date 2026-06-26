@@ -1,7 +1,7 @@
 {
   "domain": "pvautonomy_ops",
   "name": "PVAutonomy",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "documentation": "https://github.com/PVAutonomy/pvautonomy-ops",
   "issue_tracker": "https://github.com/PVAutonomy/pvautonomy-ops/issues",
   "requirements": [],
