@@ -1854,6 +1854,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             entry_id, entry_data = _resolve_target_entry_data(hass, call)
         force_rebuild = bool(call.data.get("force_rebuild", False))
 
+        # fix/#120: preflight COMPILE_SECRET_KEY before the operation starts so
+        # the status sensor never transitions to op_state=running for a pure
+        # configuration gap. The backend fail-closed guard remains as defence-in-
+        # depth; this check prevents the unnecessary YAML generation, health
+        # check, and pipeline setup that would otherwise precede it.
+        from .keyring import COMPILE_SECRET_KEY_RE, PVAutonomyKeyring
+
+        _keyring = entry_data.get("keyring")
+        if _keyring is None:
+            _keyring = PVAutonomyKeyring(hass)
+            await _keyring.async_load()
+        _csk = await _keyring.get_compile_secret_key()
+        if not _csk or not COMPILE_SECRET_KEY_RE.match(_csk):
+            raise HomeAssistantError(
+                "Build encryption is not configured. Please complete "
+                "PVAutonomy operator provisioning (COMPILE_SECRET_KEY) "
+                "before starting a firmware build."
+            )
+
         operation_runner = entry_data["operation_runner"]
         operation_tracker = entry_data["operation_tracker"]
 

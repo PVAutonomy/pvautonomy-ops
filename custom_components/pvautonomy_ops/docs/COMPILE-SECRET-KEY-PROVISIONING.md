@@ -17,6 +17,49 @@ proxy. The GitHub Actions firmware-build workflow decrypts them with the
 > committed, pasted into chat or issues, screen-shared, or logged. This
 > integration only ever logs a non-secret `sha256(key)[:8]` fingerprint.
 
+## Customer handover prerequisites
+
+Before handing a system over to a customer where firmware builds are expected:
+
+1. **Provision `compile_secret_key`** on the target HA instance (see
+   §*Safe provisioning procedure* below).
+2. **Verify presence** via Developer Tools → Actions →
+   `pvautonomy_ops.compile_secret_key_status`:
+   expected response: `{present: true, fingerprint: <8 hex chars>}`.
+   Do not report or log the key itself — fingerprint only.
+3. **Do not hand over without this step** — customers cannot and must not enter
+   `compile_secret_key`. It is an operator/build-service secret with no
+   customer-facing wizard field.
+
+### Paths that require `compile_secret_key` (firmware build)
+
+| Path | Notes |
+|------|-------|
+| Wizard → *Neues Gerät erstmalig einrichten* | Full setup build + flash |
+| Setup Dashboard → *Firmware vorbereiten* | Calls `pvautonomy_ops.build_firmware` |
+| `pvautonomy_ops.build_firmware` service | Explicit build-only service call |
+| Build/Flash button (`PVAutonomyOpsFlashButton`) | Build + OTA operator button |
+
+Without a provisioned key all of the above fail closed before any `/build`
+request is sent — no plaintext secret is transmitted.
+
+### Paths that do **not** require `compile_secret_key`
+
+| Path | Notes |
+|------|-------|
+| Wizard → *Schon laufendes Gerät nachträglich registrieren* | Adoption only, no build |
+| `pvautonomy_ops.install_prepared_firmware` | Install-only, no build |
+| `pvautonomy_ops.refresh_customer_dashboard` | UI/metadata rebuild, no build |
+
+These paths are customer-safe and can be used even when the key is absent.
+
+### Future direction
+
+HPKE envelope mode (`secret_envelope.py`) is scaffolded but **not active today**
+(`ROOT_PUBKEYS_PINNED = {}`). Once HPKE is activated, the symmetric
+`compile_secret_key` will no longer be required for proxy builds, removing this
+operator provisioning step entirely. Until then, the steps above apply.
+
 ## Current architecture (pvautonomy_ops 0.4.16)
 
 Context for where this key fits in the current build model:
