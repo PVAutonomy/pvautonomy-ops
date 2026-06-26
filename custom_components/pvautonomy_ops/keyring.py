@@ -30,7 +30,9 @@ STORAGE_KEY = "pvautonomy_ops_keyring"
 STORAGE_VERSION = 1
 
 # TASK-20260520 Phase 2: AES-256 key is exactly 64 hex chars (32 bytes).
-_COMPILE_SECRET_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+# Public alias used by the wizard preflight (fix/#113).
+COMPILE_SECRET_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_COMPILE_SECRET_KEY_RE = COMPILE_SECRET_KEY_RE
 
 # Timeouts for ESPHome entry operations
 _ENTRY_FIND_TIMEOUT_S = 90.0
