@@ -1224,6 +1224,19 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Show spinner while firmware is being built."""
         if self._build_task is None:
+            # fix/#113: preflight — verify COMPILE_SECRET_KEY before starting build
+            if not await self._preflight_compile_secret_key():
+                self._flash_error = (
+                    "Build encryption is not configured. "
+                    "Please complete PVAutonomy operator provisioning "
+                    "(COMPILE_SECRET_KEY) before starting a firmware build.\n"
+                    "Die Build-Verschlüsselung ist nicht eingerichtet. "
+                    "Bitte schließen Sie die PVAutonomy Betreiber-Provisionierung "
+                    "(COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten."
+                )
+                return self.async_show_progress_done(
+                    next_step_id="error_build_failed"
+                )
             self._build_task = self.hass.async_create_task(
                 self._do_build_firmware()
             )
@@ -1345,6 +1358,41 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PROXY_CUSTOMER_ID: self._proxy_customer_id,
             },
         )
+
+    async def _get_compile_secret_key(self) -> str | None:
+        """Load the global keyring and return the compile secret key if valid.
+
+        Returns the raw 64-hex string when provisioned and format-valid, or
+        None when absent, invalid, or the keyring is unavailable.  Isolated as
+        a method so tests can mock it without patching sys.modules.
+        """
+        import re as _re
+
+        _valid_key_re = _re.compile(r"^[0-9a-fA-F]{64}$")
+        try:
+            from .keyring import PVAutonomyKeyring
+
+            keyring = PVAutonomyKeyring(self.hass)
+            await keyring.async_load()
+            key = await keyring.get_compile_secret_key()
+        except Exception:
+            return None
+        return key if (key and _valid_key_re.match(key)) else None
+
+    async def _preflight_compile_secret_key(self) -> bool:
+        """Return True if a valid COMPILE_SECRET_KEY is provisioned in the keyring.
+
+        Delegates validation to _get_compile_secret_key (mockable seam).
+        Does not log or expose the key value.
+        """
+        key = await self._get_compile_secret_key()
+        if not key:
+            _LOGGER.warning(
+                "Wizard preflight: COMPILE_SECRET_KEY missing or invalid — "
+                "aborting build before pipeline start"
+            )
+            return False
+        return True
 
     async def async_step_progress_flash(
         self, user_input: dict[str, Any] | None = None
