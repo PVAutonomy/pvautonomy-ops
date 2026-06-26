@@ -155,7 +155,8 @@
       "already_configured": "This device is already configured.",
       "no_devices_found": "No ESPHome devices with MAC addresses found. Please adopt your Edge101 device in ESPHome first, then retry.",
       "setup_cancelled": "Setup cancelled.",
-      "device_already_bound": "Device is already bound to another configuration."
+      "device_already_bound": "Device is already bound to another configuration.",
+      "compile_secret_missing_or_invalid": "Build encryption is not configured. Please complete PVAutonomy operator provisioning (COMPILE_SECRET_KEY) before starting a firmware build."
     }
   },
   "entity": {

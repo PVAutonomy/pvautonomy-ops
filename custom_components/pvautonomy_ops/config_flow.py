@@ -1224,19 +1224,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Show spinner while firmware is being built."""
         if self._build_task is None:
-            # fix/#113: preflight — verify COMPILE_SECRET_KEY before starting build
+            # fix/#113/#116: preflight — verify COMPILE_SECRET_KEY before build
             if not await self._preflight_compile_secret_key():
-                self._flash_error = (
-                    "Build encryption is not configured. "
-                    "Please complete PVAutonomy operator provisioning "
-                    "(COMPILE_SECRET_KEY) before starting a firmware build.\n"
-                    "Die Build-Verschlüsselung ist nicht eingerichtet. "
-                    "Bitte schließen Sie die PVAutonomy Betreiber-Provisionierung "
-                    "(COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten."
-                )
-                return self.async_show_progress_done(
-                    next_step_id="error_build_failed"
-                )
+                return self.async_abort(reason="compile_secret_missing_or_invalid")
             self._build_task = self.hass.async_create_task(
                 self._do_build_firmware()
             )
