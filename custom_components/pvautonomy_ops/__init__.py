@@ -18,6 +18,8 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    BUILD_BACKEND_ESPHOME_DASHBOARD,
+    BUILD_BACKEND_MANUAL,
     CONF_ARTIFACT_CHANNEL,
     CONF_ARTIFACT_HW_FAMILY,
     CONF_ARTIFACT_OWNER,
@@ -1853,6 +1855,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         else:
             entry_id, entry_data = _resolve_target_entry_data(hass, call)
         force_rebuild = bool(call.data.get("force_rebuild", False))
+
+        # fix/#128: Guard — local/manual build entries do not use the proxy build path.
+        # Entries created via adopt_direct or local_esphome have CONF_BUILD_BACKEND=manual
+        # and must not attempt a proxy build. Raise clearly before any pipeline setup.
+        _backend_mode = entry_data.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND)
+        if _backend_mode in (BUILD_BACKEND_MANUAL, BUILD_BACKEND_ESPHOME_DASHBOARD):
+            raise HomeAssistantError(
+                "This device uses a local build path. Build firmware with ESPHome, "
+                "then register or update the device in PVAutonomy."
+            )
 
         # fix/#120: preflight COMPILE_SECRET_KEY before the operation starts so
         # the status sensor never transitions to op_state=running for a pure
