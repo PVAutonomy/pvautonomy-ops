@@ -141,6 +141,10 @@
         "data": {
           "action": "Action"
         }
+      },
+      "local_yaml_ready": {
+        "title": "Device YAML Ready",
+        "description": "Your ESPHome device YAML was generated and saved to:\n\n`{yaml_path}`\n\n**Next steps:**\n\n1. Open the file with the File Editor add-on, Samba, or Terminal/SSH.\n2. Compile it with ESPHome Dashboard or ESPHome CLI.\n3. Add these entries to your ESPHome **secrets.yaml**:\n   ```\n   api_encryption_key: <your 32-byte base64 key>\n   ota_password: <your OTA password>\n   ```\n4. Build and flash the device.\n5. Return to PVAutonomy and choose **Register an already-running device**.\n\nNo PVAutonomy Build-Key is required for this path."
       }
     },
     "progress": {
@@ -169,7 +173,8 @@
       "setup_cancelled": "Setup cancelled.",
       "device_already_bound": "Device is already bound to another configuration.",
       "compile_secret_missing_or_invalid": "Build encryption is not configured. Please complete PVAutonomy operator provisioning (COMPILE_SECRET_KEY) before starting a firmware build.",
-      "managed_build_not_configured": "Firmware builds are not yet active for your account. Contact your PVAutonomy provider to activate the managed build service."
+      "managed_build_not_configured": "Firmware builds are not yet active for your account. Contact your PVAutonomy provider to activate the managed build service.",
+      "local_yaml_exported": "Local ESPHome YAML exported. Build and flash the device with ESPHome, then return to register the running device."
     }
   },
   "entity": {

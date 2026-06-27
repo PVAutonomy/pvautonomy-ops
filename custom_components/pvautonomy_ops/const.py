@@ -7,7 +7,7 @@ All entity IDs defined here - NO hardcodes elsewhere.
 
 # Integration metadata
 DOMAIN = "pvautonomy_ops"
-VERSION = "0.4.24"
+VERSION = "0.4.25"
 CONTRACT_VERSION = "v1.0.0"
 
 # Update interval (seconds)
