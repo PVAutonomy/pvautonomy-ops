@@ -30,9 +30,14 @@ with contextlib.suppress(ImportError):  # pragma: no cover
     )
 
 from .const import (
+    BUILD_BACKEND_MANUAL,
     BUILD_BACKEND_PROXY_REMOTE,
+    BUILD_SERVICE_LOCAL_ESPHOME,
+    BUILD_SERVICE_MANAGED,
+    BUILD_SERVICE_SELF_HOSTED,
     CONF_ARTIFACT_CHANNEL,
     CONF_BUILD_BACKEND,
+    CONF_BUILD_SERVICE_MODE,
     CONF_CACHE_KEEP_BUILDS,
     CONF_DEVICE_SLUG,
     CONF_MANUFACTURER,
@@ -68,8 +73,10 @@ from .const import (
     DOMAIN,
     LOCATION_PRESETS,
     MANUFACTURER_MAP,
-    MENU_OPTION_ADOPT_EXISTING,
-    MENU_OPTION_SETUP_NEW,
+    MENU_OPTION_ADOPT_DIRECT,
+    MENU_OPTION_ADVANCED_PROXY,
+    MENU_OPTION_LOCAL_ESPHOME,
+    MENU_OPTION_MANAGED_BUILD,
     MODEL_REGISTRY_MAP,
     SETUP_STATE_ADOPTED,
     TIER_STANDARD,
@@ -258,6 +265,10 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # device WITHOUT any build/install/reflash. Set from the first-screen
         # menu; routes target_device → adopt_confirm instead of the build path.
         self._adopt_mode: bool = False
+        # Build service mode (#128): records which UX path created this entry.
+        # Default = managed (pva_ key + DEFAULT_PROXY_BASE_URL); overridden by
+        # the mode-selector step before any proxy/key collection happens.
+        self._build_service_mode: str = BUILD_SERVICE_MANAGED
         # MAC conflict detection (relocate from existing device)
         from .metadata import DeviceMetadata
 
@@ -277,37 +288,165 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 1: Choose between setting up a new device or adopting a
-        already-running one.
+        """Step 1: Choose build service mode.
 
-        Both paths share the proxy → manufacturer → model → location →
-        target_device binding steps. ``setup_new`` then builds + flashes
-        firmware in-wizard; ``adopt_existing`` registers the running device
-        WITHOUT any build/install/reflash (see ``async_step_adopt_confirm``).
+        Four paths:
+        - managed_build: PVAutonomy Managed Build Service (pva_ key, wizard builds firmware)
+        - adopt_direct: Register already-running device (no key, no build)
+        - local_esphome: Build firmware yourself (no key, guidance only)
+        - advanced_proxy: Self-hosted / custom proxy (existing proxy step)
         """
         return self.async_show_menu(
             step_id="user",
-            menu_options=[MENU_OPTION_SETUP_NEW, MENU_OPTION_ADOPT_EXISTING],
+            menu_options=[
+                MENU_OPTION_MANAGED_BUILD,
+                MENU_OPTION_ADOPT_DIRECT,
+                MENU_OPTION_LOCAL_ESPHOME,
+                MENU_OPTION_ADVANCED_PROXY,
+            ],
         )
 
     async def async_step_setup_new(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Menu target: full setup (build + OTA flash). Pre-fills proxy from
-        existing entries (DRY UX for 2nd+ device)."""
-        self._adopt_mode = False
-        return await self.async_step_proxy()
+        """Redirected to managed_build (backward compat for programmatic callers)."""
+        return await self.async_step_managed_build()
 
     async def async_step_adopt_existing(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Menu target: adopt an already-running device — no build/flash.
+        """Redirected to adopt_direct (backward compat for programmatic callers)."""
+        return await self.async_step_adopt_direct()
 
-        Reuses the same binding steps; ``_adopt_mode`` routes the flow to
-        ``async_step_adopt_confirm`` after the physical device is bound.
-        """
+    async def async_step_managed_build(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Menu target: PVAutonomy Managed Build Service."""
+        self._adopt_mode = False
+        self._build_service_mode = BUILD_SERVICE_MANAGED
+        return await self.async_step_managed_key()
+
+    async def async_step_adopt_direct(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Menu target: Register already-running device without proxy."""
         self._adopt_mode = True
+        self._build_service_mode = BUILD_SERVICE_LOCAL_ESPHOME
+        self._proxy_base_url = ""
+        self._proxy_api_key = ""
+        self._proxy_customer_id = ""
+        return await self.async_step_manufacturer()
+
+    async def async_step_local_esphome(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Menu target: Local ESPHome / build yourself."""
+        self._adopt_mode = True
+        self._build_service_mode = BUILD_SERVICE_LOCAL_ESPHOME
+        self._proxy_base_url = ""
+        self._proxy_api_key = ""
+        self._proxy_customer_id = ""
+        return await self.async_step_local_esphome_guide()
+
+    async def async_step_advanced_proxy(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Menu target: Self-hosted / custom proxy (advanced)."""
+        self._adopt_mode = False
+        self._build_service_mode = BUILD_SERVICE_SELF_HOSTED
         return await self.async_step_proxy()
+
+    async def async_step_managed_key(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Managed Build Service: collect PVAutonomy Build-Key only.
+
+        proxy_base_url is fixed to DEFAULT_PROXY_BASE_URL and never shown.
+        customer_id is auto-derived via /whoami.
+        """
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            self._proxy_api_key = user_input[CONF_PROXY_API_KEY]
+            self._proxy_base_url = DEFAULT_PROXY_BASE_URL
+            self._proxy_customer_id = ""
+
+            try:
+                from .build_backend import ProxyRemoteBuildBackend
+
+                backend = ProxyRemoteBuildBackend(
+                    base_url=self._proxy_base_url,
+                    api_key=self._proxy_api_key,
+                    customer_id="",
+                )
+                try:
+                    await backend.health_check()
+
+                    try:
+                        whoami = await backend.whoami()
+                        if whoami and whoami.get("customer_id"):
+                            self._proxy_customer_id = whoami["customer_id"]
+                        else:
+                            _LOGGER.warning(
+                                "/whoami returned no customer_id — attempting fallback"
+                            )
+                    except Exception as whoami_exc:
+                        exc_str = str(whoami_exc).lower()
+                        if "401" in exc_str or "403" in exc_str:
+                            errors["base"] = "build_key_rejected"
+                            _LOGGER.warning("Build-Key auth failed: %s", whoami_exc)
+                        else:
+                            _LOGGER.warning(
+                                "/whoami failed (trying fallback): %s", whoami_exc
+                            )
+                finally:
+                    await backend.close()
+
+                if not errors and not self._proxy_customer_id:
+                    inherited = self._find_inherited_customer_id()
+                    if inherited:
+                        self._proxy_customer_id = inherited
+
+                if not errors and not self._proxy_customer_id:
+                    errors["base"] = "build_account_incomplete"
+                    _LOGGER.warning("Managed: customer_id not derivable")
+
+                if not errors:
+                    return await self.async_step_manufacturer()
+
+            except Exception as exc:
+                errors["base"] = "build_service_unavailable"
+                _LOGGER.warning("Managed Build Service unreachable: %s", exc)
+
+        return self.async_show_form(
+            step_id="managed_key",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PROXY_API_KEY,
+                        default="",
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_local_esphome_guide(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Local ESPHome: guidance step — no build, no key required.
+
+        Shows instructions for building firmware with ESPHome locally.
+        Routes to manufacturer/model selection, then ends in adopt_confirm.
+        No managed Build-Key, no COMPILE_SECRET_KEY.
+        """
+        if user_input is not None:
+            return await self.async_step_manufacturer()
+
+        return self.async_show_form(
+            step_id="local_esphome_guide",
+            data_schema=vol.Schema({}),
+        )
 
     async def _proceed_after_binding(self) -> FlowResult:
         """Branch after the physical device is bound in ``target_device``.
@@ -1170,7 +1309,12 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_PROXY_BASE_URL: self._proxy_base_url,
                     CONF_PROXY_API_KEY: self._proxy_api_key,
                     CONF_PROXY_CUSTOMER_ID: self._proxy_customer_id,
-                    CONF_BUILD_BACKEND: BUILD_BACKEND_PROXY_REMOTE,
+                    CONF_BUILD_BACKEND: (
+                        BUILD_BACKEND_MANUAL
+                        if self._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME
+                        else BUILD_BACKEND_PROXY_REMOTE
+                    ),
+                    CONF_BUILD_SERVICE_MODE: self._build_service_mode,
                     CONF_ARTIFACT_CHANNEL: DEFAULT_ARTIFACT_CHANNEL,
                     CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT: DEFAULT_PROXY_AUTO_REFRESH,
                     CONF_OTA_RETRIES: DEFAULT_OTA_RETRIES,
@@ -1224,8 +1368,11 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Show spinner while firmware is being built."""
         if self._build_task is None:
-            # fix/#113/#116: preflight — verify COMPILE_SECRET_KEY before build
+            # fix/#113/#116/#128: preflight — verify COMPILE_SECRET_KEY before build.
+            # Managed mode uses its own abort reason; other modes keep the original.
             if not await self._preflight_compile_secret_key():
+                if self._build_service_mode == BUILD_SERVICE_MANAGED:
+                    return self.async_abort(reason="managed_build_not_configured")
                 return self.async_abort(reason="compile_secret_missing_or_invalid")
             self._build_task = self.hass.async_create_task(
                 self._do_build_firmware()
@@ -1575,6 +1722,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PROXY_API_KEY: self._proxy_api_key,
                 CONF_PROXY_CUSTOMER_ID: self._proxy_customer_id,
                 CONF_BUILD_BACKEND: BUILD_BACKEND_PROXY_REMOTE,
+                CONF_BUILD_SERVICE_MODE: self._build_service_mode,
                 CONF_ARTIFACT_CHANNEL: DEFAULT_ARTIFACT_CHANNEL,
                 CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT: DEFAULT_PROXY_AUTO_REFRESH,
                 CONF_OTA_RETRIES: DEFAULT_OTA_RETRIES,

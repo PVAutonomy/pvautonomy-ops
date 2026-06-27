@@ -7,7 +7,7 @@ All entity IDs defined here - NO hardcodes elsewhere.
 
 # Integration metadata
 DOMAIN = "pvautonomy_ops"
-VERSION = "0.4.23"
+VERSION = "0.4.24"
 CONTRACT_VERSION = "v1.0.0"
 
 # Update interval (seconds)
@@ -291,6 +291,19 @@ SETUP_STATES_SKIP_BUILD = (
 # Config Flow first-screen menu options (setup new vs adopt running device).
 MENU_OPTION_SETUP_NEW = "setup_new"
 MENU_OPTION_ADOPT_EXISTING = "adopt_existing"
+
+# Build Service mode — records which UX path created this config entry.
+# Absent in pre-#128 entries (treated as legacy, no crash).
+CONF_BUILD_SERVICE_MODE = "build_service_mode"
+BUILD_SERVICE_MANAGED = "managed"          # pva_ Build-Key, DEFAULT_PROXY_BASE_URL
+BUILD_SERVICE_LOCAL_ESPHOME = "local_esphome"  # no proxy, no key
+BUILD_SERVICE_SELF_HOSTED = "self_hosted"  # custom proxy URL
+
+# Additional menu options for the expanded first-screen menu (#128)
+MENU_OPTION_MANAGED_BUILD = "managed_build"
+MENU_OPTION_ADOPT_DIRECT = "adopt_direct"
+MENU_OPTION_LOCAL_ESPHOME = "local_esphome"
+MENU_OPTION_ADVANCED_PROXY = "advanced_proxy"
 
 # Proxy config keys (canonical — used in Config Flow + Options Flow)
 CONF_PROXY_BASE_URL = "proxy_base_url"

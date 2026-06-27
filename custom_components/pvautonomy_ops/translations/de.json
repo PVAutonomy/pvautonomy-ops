@@ -3,15 +3,31 @@
     "step": {
       "user": {
         "title": "PVAutonomy Einrichtung",
-        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Neues Gerät erstmalig einrichten** — für ein fabrikneues oder noch nicht eingerichtetes Gerät: PVAutonomy erstellt die Firmware und flasht sie.\n\n**Schon laufendes Gerät nachträglich registrieren** — Sonderfall: Ihr Gerät läuft bereits, taucht aber in PVAutonomy nicht auf (z. B. nach einer HA-Neuinstallation). Es wird nichts gebaut, geflasht oder umgezogen.\n\n**Funktionsumfang ändern (Standard/Erweitert)** — bei einem bereits eingerichteten Gerät: *Neues Gerät erstmalig einrichten* wählen und **dieselbe Gerätenummer** angeben; das Gerät wird neu geflasht, dabei wählst du den Funktionsumfang.",
+        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Managed Build Service** — PVAutonomy erstellt und flasht Ihre Firmware. Erfordert einen PVAutonomy Build-Key.\n\n**Laufendes Gerät registrieren** — Ihr Gerät läuft bereits. Es wird nichts gebaut oder geflasht.\n\n**Lokaler ESPHome-Build** — Firmware selbst erstellen und flashen mit ESPHome. Kein Build-Key erforderlich.\n\n**Erweitert / eigener Proxy** — eigene Proxy-URL und Zugangsdaten verwenden.",
         "menu_options": {
-          "setup_new": "Neues Gerät erstmalig einrichten (Firmware erstellen + flashen)",
-          "adopt_existing": "Schon laufendes Gerät nachträglich registrieren (kein Build/Flash)"
+          "managed_build": "Firmware mit PVAutonomy Managed Service erstellen und installieren",
+          "adopt_direct": "Laufendes Gerät registrieren (kein Firmware-Build)",
+          "local_esphome": "Firmware selbst erstellen und installieren (ESPHome)",
+          "advanced_proxy": "Erweitert / eigener Proxy"
         }
       },
+      "managed_key": {
+        "title": "PVAutonomy Managed Build Service",
+        "description": "Geben Sie den Build-Key ein, den Sie bei der PVAutonomy-Aktivierung erhalten haben.",
+        "data": {
+          "proxy_api_key": "PVAutonomy Build-Key"
+        },
+        "data_description": {
+          "proxy_api_key": "Ihr Build-Key (beginnt mit pva_)."
+        }
+      },
+      "local_esphome_guide": {
+        "title": "Firmware mit ESPHome erstellen",
+        "description": "Erstellen und installieren Sie Ihre Firmware lokal mit ESPHome — kein PVAutonomy Build-Key erforderlich.\n\n**Schritte:**\n1. Wählen Sie auf den nächsten Seiten Ihr Wechselrichter-Modell aus.\n2. Erstellen Sie die Firmware mit ESPHome Dashboard oder ESPHome CLI.\n3. Verwenden Sie Ihren eigenen api.encryption.key und ota.password.\n4. Flashen Sie Ihr Gerät.\n5. Kehren Sie zu PVAutonomy zurück und wählen Sie **Laufendes Gerät registrieren**."
+      },
       "proxy": {
-        "title": "Build-Proxy-Verbindung",
-        "description": "PVAutonomy Build-Proxy konfigurieren. Ihr API-Schlüssel authentifiziert Firmware-Build-Anfragen.",
+        "title": "Eigener Proxy",
+        "description": "Erweitert: eigene Proxy-URL und Zugangsdaten konfigurieren.",
         "data": {
           "proxy_base_url": "Proxy-URL",
           "proxy_api_key": "API-Schlüssel"
@@ -149,14 +165,18 @@
       "missing_mac_identifier": "Ausgewähltes Gerät hat keine MAC-Adresse. Bitte das Gerät zuerst in ESPHome adoptieren.",
       "slug_immutable": "Geräte-Slug ist nach der Erstinstallation unveränderlich. Für Standort- oder Nummernwechsel nutzen Sie die Umsetzen-Aktion in den Geräteoptionen.",
       "slug_already_in_use": "Dieser Geräte-Slug wird bereits von einem anderen Konfigurationseintrag verwendet.",
-      "customer_id_missing": "Proxy customer_id konnte nicht ermittelt werden (whoami hat keine geliefert und kein passender vorhandener Eintrag wurde gefunden). Bitte API-Key prüfen oder customer_id in einem vorhandenen PVAutonomy-Eintrag setzen."
+      "customer_id_missing": "Proxy customer_id konnte nicht ermittelt werden (whoami hat keine geliefert und kein passender vorhandener Eintrag wurde gefunden). Bitte API-Key prüfen oder customer_id in einem vorhandenen PVAutonomy-Eintrag setzen.",
+      "build_key_rejected": "Build-Key nicht erkannt. Überprüfen Sie Ihren Build-Key oder kontaktieren Sie PVAutonomy.",
+      "build_service_unavailable": "PVAutonomy Build-Service ist derzeit nicht erreichbar. Prüfen Sie Ihre Internetverbindung.",
+      "build_account_incomplete": "Build-Key akzeptiert, aber Konto-Einrichtung ist unvollständig. Kontaktieren Sie den PVAutonomy-Support."
     },
     "abort": {
       "already_configured": "Dieses Gerät ist bereits konfiguriert.",
       "no_devices_found": "Keine ESPHome-Geräte mit MAC-Adressen gefunden. Bitte adoptieren Sie Ihr Edge101-Gerät zuerst in ESPHome und versuchen Sie es dann erneut.",
       "setup_cancelled": "Einrichtung abgebrochen.",
       "device_already_bound": "Gerät ist bereits einer anderen Konfiguration zugewiesen.",
-      "compile_secret_missing_or_invalid": "Build-Verschlüsselung ist nicht eingerichtet. Bitte schließen Sie zuerst die PVAutonomy-Operator-Provisionierung (COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten."
+      "compile_secret_missing_or_invalid": "Build-Verschlüsselung ist nicht eingerichtet. Bitte schließen Sie zuerst die PVAutonomy-Operator-Provisionierung (COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten.",
+      "managed_build_not_configured": "Firmware-Builds sind für Ihr Konto noch nicht aktiviert. Kontaktieren Sie Ihren PVAutonomy-Anbieter, um den verwalteten Build-Service zu aktivieren."
     }
   },
   "entity": {
