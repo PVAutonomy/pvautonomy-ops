@@ -148,6 +148,10 @@
         "data": {
           "action": "Aktion"
         }
+      },
+      "local_yaml_ready": {
+        "title": "Geräte-YAML bereit",
+        "description": "Die ESPHome-Geräte-YAML wurde erzeugt und gespeichert unter:\n\n`{yaml_path}`\n\n**Nächste Schritte:**\n\n1. Öffnen Sie die Datei mit dem File-Editor-Add-on, Samba oder Terminal/SSH.\n2. Kompilieren Sie sie mit ESPHome Dashboard oder ESPHome CLI.\n3. Ergänzen Sie diese Einträge in Ihrer ESPHome **secrets.yaml**:\n   ```\n   api_encryption_key: <Ihr 32-Byte-Base64-Key>\n   ota_password: <Ihr OTA-Passwort>\n   ```\n4. Bauen und flashen Sie das Gerät.\n5. Kehren Sie zu PVAutonomy zurück und wählen Sie **Bereits laufendes Gerät registrieren**.\n\nFür diesen Pfad ist kein PVAutonomy Build-Key erforderlich."
       }
     },
     "progress": {
@@ -176,7 +180,8 @@
       "setup_cancelled": "Einrichtung abgebrochen.",
       "device_already_bound": "Gerät ist bereits einer anderen Konfiguration zugewiesen.",
       "compile_secret_missing_or_invalid": "Build-Verschlüsselung ist nicht eingerichtet. Bitte schließen Sie zuerst die PVAutonomy-Operator-Provisionierung (COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten.",
-      "managed_build_not_configured": "Firmware-Builds sind für Ihr Konto noch nicht aktiviert. Kontaktieren Sie Ihren PVAutonomy-Anbieter, um den verwalteten Build-Service zu aktivieren."
+      "managed_build_not_configured": "Firmware-Builds sind für Ihr Konto noch nicht aktiviert. Kontaktieren Sie Ihren PVAutonomy-Anbieter, um den verwalteten Build-Service zu aktivieren.",
+      "local_yaml_exported": "Local-ESPHome-YAML exportiert. Bauen und flashen Sie das Gerät mit ESPHome und registrieren Sie danach das laufende Gerät."
     }
   },
   "entity": {

@@ -12,6 +12,7 @@ Directive: EPIC-006-WP3
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -448,6 +449,67 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({}),
         )
 
+    async def _generate_and_save_local_yaml(self) -> tuple[str, str]:
+        """Generate ESPHome YAML for local self-build and save to config dir.
+
+        Returns (yaml_path_str, node_name) on success.
+        Raises YamlGenerationError on failure.
+        No managed-service context required — generates !secret placeholders.
+        """
+        from .yaml_generator import YamlGenerationError, generate_device_yaml  # noqa: F401
+
+        node_name = compute_node_name(self._model_slug, self._site, self._number)
+        yaml_content = generate_device_yaml(
+            model=self._model_slug,
+            site=self._site,
+            number=self._number,
+            registry_file=self._registry_file,
+            mac_suffix=None,
+            selected_tier=TIER_STANDARD,
+            modbus_version=None,
+            map_confirmed=True,
+        )
+
+        out_dir = Path(self.hass.config.path("pvautonomy", "generated"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{node_name}.yaml"
+        out_path.write_text(yaml_content, encoding="utf-8")
+        _LOGGER.info(
+            "Local ESPHome YAML written: %s (%d lines)",
+            out_path,
+            yaml_content.count("\n"),
+        )
+        return str(out_path), node_name
+
+    async def async_step_local_yaml_ready(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Local ESPHome: generate YAML, write to file, show path + instructions.
+
+        Called after model/location are known.
+        No Build-Key, no COMPILE_SECRET_KEY, no managed build.
+        On submit, aborts with local_yaml_exported — user returns later to adopt.
+        """
+        if user_input is not None:
+            return self.async_abort(reason="local_yaml_exported")
+
+        yaml_path = ""
+        node_name = compute_node_name(self._model_slug, self._site, self._number)
+        try:
+            yaml_path, node_name = await self._generate_and_save_local_yaml()
+        except Exception as exc:
+            _LOGGER.error("Local YAML generation failed: %s", exc)
+            yaml_path = ""
+
+        return self.async_show_form(
+            step_id="local_yaml_ready",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "yaml_path": yaml_path or "(generation failed — check logs)",
+                "node_name": node_name,
+            },
+        )
+
     async def _proceed_after_binding(self) -> FlowResult:
         """Branch after the physical device is bound in ``target_device``.
 
@@ -657,6 +719,8 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._site = site
                 self._number = number
+                if self._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME:
+                    return await self.async_step_local_yaml_ready()
                 return await self.async_step_target_device()
 
         return self.async_show_form(
