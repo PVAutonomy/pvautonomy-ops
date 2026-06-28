@@ -113,7 +113,7 @@
       },
       "adopt_confirm": {
         "title": "Adopt Running Device",
-        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nThis registers the already-running device in PVAutonomy. **No firmware is built, installed, or reflashed.** Click **Submit** to adopt."
+        "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nThis registers the already-running device in PVAutonomy. **No firmware is built, installed, or reflashed.** Click **Submit** to adopt.{missing_entities}"
       },
       "progress_build": {
         "title": "Building Firmware",
@@ -172,7 +172,9 @@
       "customer_id_missing": "Proxy customer_id could not be determined (whoami did not return one and no matching existing entry was found). Please verify your proxy API key, or set the customer_id in an existing PVAutonomy entry first.",
       "build_key_rejected": "Build-Key not recognised. Check your Build-Key or contact PVAutonomy.",
       "build_service_unavailable": "PVAutonomy Build Service is currently unavailable. Check your internet connection and try again.",
-      "build_account_incomplete": "Build-Key accepted, but account setup is not complete. Contact PVAutonomy support."
+      "build_account_incomplete": "Build-Key accepted, but account setup is not complete. Contact PVAutonomy support.",
+      "missing_required_entities": "The selected device does not expose the expected PVAutonomy ESPHome entities. Regenerate the YAML through Local ESPHome, avoid renaming generated entities, flash the device again, wait until Home Assistant has created all ESPHome entities, then retry Adopt Direct.",
+      "entity_surface_validation_failed": "The entity-surface contract could not be loaded for this model. The PVAutonomy integration may be incomplete or corrupted. Try reinstalling or updating the integration (HACS or installer), then retry Adopt Direct."
     },
     "abort": {
       "already_configured": "This device is already configured.",

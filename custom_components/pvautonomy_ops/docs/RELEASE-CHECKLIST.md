@@ -27,11 +27,6 @@ The release version is **not** taken from the source repo's `const.py`.
   during release-prep.
 - `CONTRACT_VERSION` (e.g. `v1.0.0`) is a **separate** contract value, unrelated
   to the release version; it is still valid for the `/health` contract check.
-- **After each stable release**, `pvautonomy-config` must also be updated to
-  the release version (see _pvautonomy-config version sync_ step in Stable
-  promotion). This protects staging deploys via `deploy_to_edatec.sh
-  --scope=pvops`, which copy files verbatim from `pvautonomy-config` and do not
-  have the HACS-export target-version guard.
 
 ## Pre-release (in `pvautonomy-ops` target, during release-prep)
 
@@ -103,30 +98,6 @@ Stable promotion is **more** than flipping `prerelease=false`. Do all of:
 - [ ] **GO required:** no stable promotion without an explicit GO.
 - [ ] **GitHub Release flag:** set the `pvautonomy-ops` release to
   `prerelease=false` (stable/latest).
-- [ ] **GitHub Latest set:** after `prerelease=false`, explicitly mark the
-  release as the GitHub Latest so `releases/latest` API and HACS resolve the
-  correct version. Promoting a prerelease to stable does **not** automatically
-  set Latest — this step is always required:
-  ```bash
-  gh release edit vX.Y.Z --repo PVAutonomy/pvautonomy-ops --latest
-  # Verify:
-  gh api repos/PVAutonomy/pvautonomy-ops/releases/latest --jq .tag_name
-  # Expected: vX.Y.Z
-  ```
-- [ ] **pvautonomy-config version sync:** update the source repo version so
-  staging deploys via `deploy_to_edatec.sh --scope=pvops` write the correct
-  version to disk. This is NOT part of the HACS export; it is a separate commit
-  in `pvautonomy-config`:
-  - `custom_components/pvautonomy_ops/manifest.json` → `"version": "X.Y.Z"`
-  - `custom_components/pvautonomy_ops/const.py` → `VERSION = "X.Y.Z"`
-  ```bash
-  # Verify after the commit:
-  grep '"version"' custom_components/pvautonomy_ops/manifest.json
-  grep '^VERSION' custom_components/pvautonomy_ops/const.py
-  python3 -m json.tool custom_components/pvautonomy_ops/manifest.json >/dev/null
-  # Commit message:
-  # [fix/#NNN] sync pvautonomy ops version to vX.Y.Z
-  ```
 - [ ] **Asset reachable:** the release asset (`pvautonomy_ops-X.Y.Z.zip`)
   returns HTTP 200.
 - [ ] **Compute + compare SHA-256:** compute the asset SHA-256 and compare it
@@ -138,6 +109,11 @@ Stable promotion is **more** than flipping `prerelease=false`. Do all of:
 - [ ] **Release-notes URL:** verify the release notes / title are correct.
 - [ ] **Stable-channel validation:** validate that the stable channel actually
   serves the intended version (separate from the GitHub-flag flip).
+- [ ] **`compile_secret_key` provisioned on customer-facing hosts:** before
+  handing over any system where firmware build paths are expected, verify that
+  `pvautonomy_ops.compile_secret_key_status` returns `{present: true}` on the
+  target HA instance. See
+  [`docs/COMPILE-SECRET-KEY-PROVISIONING.md`](COMPILE-SECRET-KEY-PROVISIONING.md).
 
 > For each release, compute and verify the artifact SHA from the published
 > asset. Do not copy SHA values from older release notes or previous checklist
@@ -148,58 +124,13 @@ Stable promotion is **more** than flipping `prerelease=false`. Do all of:
 - [ ] **Verify HACS install:** test on a clean HA instance.
 - [ ] **Verify HACS update:** test upgrade from the previous version.
 - [ ] **Dual Install Validation (at stable promotion):**
-
-  **HACS path** (on a HACS-managed staging host, e.g. `.106`):
-  - Trigger a metadata refresh so HACS fetches the current `releases/latest`:
-    ```bash
-    POST /api/services/homeassistant/update_entity
-    {"entity_id": "update.pvautonomy_ops_update"}
-    ```
-  - Verify the update entity reflects the target version:
-    ```bash
-    GET /api/states/update.pvautonomy_ops_update
-    # Expected:
-    #   attributes.latest_version == "vX.Y.Z"
-    #   attributes.installed_version is plausible (previous version)
-    #   state != "unavailable"
-    ```
-  - Note: `update.pvautonomy_ops_update` is only present on HACS-managed hosts.
-    Its absence on an Installer-managed host is expected, not an error.
-
-  **Installer / customer path** (on a non-HACS staging host, e.g. `.120`):
-  - Restart the PVAutonomy Installer add-on. The slug includes a repository
-    hash prefix — retrieve it from the add-on's entity or the Supervisor API
-    before running (use `<installer_slug>` as a placeholder here):
-    ```bash
-    POST /api/services/hassio/addon_restart
-    {"addon": "<installer_slug>"}
-    ```
-  - Check the add-on log for install/SHA confirmation:
-    ```bash
-    GET /api/hassio/addons/<installer_slug>/logs
-    # Expected log lines:
-    #   sha256 verified: <sha>
-    #   PVAutonomy Ops X.Y.Z installed at /config/custom_components/pvautonomy_ops
-    ```
-  - Restart Home Assistant if the installer requests it (it always does after
-    an upgrade):
-    ```bash
-    POST /api/services/homeassistant/restart
-    ```
-  - After HA comes back up, verify the loaded version:
-    ```bash
-    GET /api/states/sensor.pvautonomy_status
-    # Expected: attributes.version == "X.Y.Z"
-    ```
-  - Note: there is currently no `update.pvautonomy_ops_update` entity on
-    Installer-managed hosts. Validation relies on the add-on log and
-    `sensor.pvautonomy_status` instead.
-
-  **Cross-path invariants:**
-  - **Same artifact / SHA** on both paths (compare SHA from add-on log and
-    from `pvautonomy-addons/integration/stable.json`).
-  - **No split-brain:** a host that uses the Installer must not also have HACS
-    managing `pvautonomy_ops` (the installer enforces this with a hard guard).
+  - **Customer / app path:** Installer/Updater add-on (`stable`) installs the
+    target version.
+  - **Developer / HACS path:** HACS (`stable`) offers the target version as
+    latest/unbadged.
+  - **Same artifact / SHA** on both paths.
+  - **No split-brain:** an add-on install shows no HACS leftovers and vice
+    versa.
 - [ ] **Notify:** inform customers/testers of the new release.
 
 ## Issue closure (separate, last)

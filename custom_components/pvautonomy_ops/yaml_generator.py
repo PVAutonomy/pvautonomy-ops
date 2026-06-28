@@ -800,3 +800,78 @@ def _patch_secret_tokens(yaml_text: str) -> str:
         r"\1!secret \2",
         yaml_text,
     )
+
+
+def derive_required_entity_names(
+    registry_file: str,
+    selected_tier: str = TIER_STANDARD,
+    registry_root: Path | None = None,
+) -> list[str] | None:
+    """Return generated entity names required for adopt-time surface validation.
+
+    Returns the ``name`` values (e.g. ``battery_soc_device``) that the
+    generator would emit for each entity that passes the tier gate and is
+    enabled by default.  HA stores this value as
+    ``RegistryEntry.original_name`` after the ESPHome integration adopts
+    the device.
+
+    Rules (mirror ``_should_emit`` + ``_apply_disabled_by_default``):
+    - Only entities whose tier rank <= ``selected_tier`` rank are included.
+    - Entities with ``enabled_by_default: false`` (or ``disabled_by_default:
+      true``) are excluded — they must not block adoption.
+    - Entities with ``generator_skip: true`` are excluded.
+    - Only ``sensors`` and ``numbers`` buckets are checked (the primary
+      runtime surface for standard-tier adopt validation).
+
+    Returns:
+        ``list[str]`` (possibly empty) when the registry loaded successfully.
+        ``None`` when the registry could not be loaded — callers must treat
+        this as a hard failure, not a pass.  A ``None`` result means the
+        contract cannot be derived, so adoption must not proceed silently.
+    """
+    try:
+        registry = _load_registry(registry_file, registry_root)
+    except Exception:
+        _LOGGER.warning(
+            "derive_required_entity_names: could not load registry %s — "
+            "returning None (callers must fail-closed)",
+            registry_file,
+        )
+        return None
+
+    selected_rank = TIER_ORDER.get(selected_tier, 0)
+    regs = registry.get("registers") or {}
+    required: list[str] = []
+
+    def _emit_candidate(reg: dict) -> bool:
+        if not isinstance(reg, dict):
+            return False
+        if reg.get("generator_skip", False):
+            return False
+        entity_tier = reg.get("tier", TIER_STANDARD)
+        entity_rank = TIER_ORDER.get(entity_tier, 0)
+        if entity_rank > selected_rank:
+            return False
+        # Mirror _apply_disabled_by_default: disabled_by_default wins over
+        # enabled_by_default when both are present.
+        if reg.get("disabled_by_default", False):
+            return False
+        if not reg.get("enabled_by_default", True):
+            return False
+        return True
+
+    for sensor in regs.get("sensors") or []:
+        if not _emit_candidate(sensor):
+            continue
+        entity_id = sensor.get("id")
+        if entity_id:
+            required.append(f"{entity_id}_device")
+
+    for number in regs.get("numbers") or []:
+        if not _emit_candidate(number):
+            continue
+        entity_id = number.get("id")
+        if entity_id:
+            required.append(f"{entity_id}_device")
+
+    return required

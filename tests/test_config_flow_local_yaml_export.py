@@ -28,6 +28,17 @@ from custom_components.pvautonomy_ops.const import (
     BUILD_SERVICE_MANAGED,
 )
 
+# Save the real yaml_generator symbols before any stub can replace the module.
+# _make_yaml_generator_stub() replaces sys.modules so that generate_device_yaml
+# can be mocked; it must carry over functions added after fix/#134 so that
+# subsequent test files that import derive_required_entity_names still work.
+try:
+    from custom_components.pvautonomy_ops.yaml_generator import (
+        derive_required_entity_names as _real_derive_required_entity_names,
+    )
+except ImportError:
+    _real_derive_required_entity_names = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,7 +91,13 @@ def _make_flow(
 
 
 def _make_yaml_generator_stub(yaml_content: str = "placeholder_yaml: true"):
-    """Create and install a sys.modules stub for yaml_generator."""
+    """Create and install a sys.modules stub for yaml_generator.
+
+    Stubs generate_device_yaml so callers see a controlled return value.
+    Carries over derive_required_entity_names (real function saved at import
+    time) so test modules that import it after this stub is installed still
+    get a working implementation (#134 compatibility).
+    """
     mod = types.ModuleType("custom_components.pvautonomy_ops.yaml_generator")
 
     class YamlGenerationError(Exception):
@@ -88,6 +105,8 @@ def _make_yaml_generator_stub(yaml_content: str = "placeholder_yaml: true"):
 
     mod.YamlGenerationError = YamlGenerationError
     mod.generate_device_yaml = MagicMock(return_value=yaml_content)
+    if _real_derive_required_entity_names is not None:
+        mod.derive_required_entity_names = _real_derive_required_entity_names
     sys.modules["custom_components.pvautonomy_ops.yaml_generator"] = mod
     return mod
 

@@ -113,7 +113,7 @@
       },
       "adopt_confirm": {
         "title": "Laufendes Gerät übernehmen",
-        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nHiermit wird das bereits laufende Gerät in PVAutonomy registriert. **Es wird keine Firmware erstellt, installiert oder neu geflasht.** Klicken Sie auf **Senden**, um zu übernehmen."
+        "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nHiermit wird das bereits laufende Gerät in PVAutonomy registriert. **Es wird keine Firmware erstellt, installiert oder neu geflasht.** Klicken Sie auf **Senden**, um zu übernehmen.{missing_entities}"
       },
       "progress_build": {
         "title": "Firmware wird erstellt",
@@ -172,7 +172,9 @@
       "customer_id_missing": "Proxy customer_id konnte nicht ermittelt werden (whoami hat keine geliefert und kein passender vorhandener Eintrag wurde gefunden). Bitte API-Key prüfen oder customer_id in einem vorhandenen PVAutonomy-Eintrag setzen.",
       "build_key_rejected": "Build-Key nicht erkannt. Überprüfen Sie Ihren Build-Key oder kontaktieren Sie PVAutonomy.",
       "build_service_unavailable": "PVAutonomy Build-Service ist derzeit nicht erreichbar. Prüfen Sie Ihre Internetverbindung.",
-      "build_account_incomplete": "Build-Key akzeptiert, aber Konto-Einrichtung ist unvollständig. Kontaktieren Sie den PVAutonomy-Support."
+      "build_account_incomplete": "Build-Key akzeptiert, aber Konto-Einrichtung ist unvollständig. Kontaktieren Sie den PVAutonomy-Support.",
+      "missing_required_entities": "Das ausgewählte Gerät stellt nicht die erwarteten PVAutonomy-ESPHome-Entitäten bereit. Erzeuge die YAML erneut über Local ESPHome, benenne die generierten Entitäten nicht um, flashe das Gerät erneut, warte bis Home Assistant alle ESPHome-Entitäten angelegt hat, und versuche Adopt Direct erneut.",
+      "entity_surface_validation_failed": "Der Entitäts-Oberflächenvertrag konnte für dieses Modell nicht geladen werden. Die PVAutonomy-Integration ist möglicherweise unvollständig oder beschädigt. Installiere die Integration neu oder aktualisiere sie (HACS oder Installer) und versuche Adopt Direct erneut."
     },
     "abort": {
       "already_configured": "Dieses Gerät ist bereits konfiguriert.",
