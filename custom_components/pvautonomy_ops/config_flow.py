@@ -1336,6 +1336,89 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def _validate_entity_surface(self) -> list[str] | None:
+        """Check the adopted device exposes required PVAutonomy entity names.
+
+        Uses the HA entity registry (works when the device is offline).
+        Matches by ``RegistryEntry.original_name`` — the name set in the
+        generated ESPHome YAML (e.g. ``battery_soc_device``), not the
+        HA-slugified ``entity_id``.
+
+        Returns:
+            ``list[str]`` (non-empty) — missing required entity names → block.
+            ``list[str]`` (empty) — surface complete → allow.
+            ``None`` — validation could not be performed (broken installation,
+            registry unavailable) → block with ``entity_surface_validation_failed``.
+        """
+        from homeassistant.helpers import entity_registry as er
+
+        from .yaml_generator import derive_required_entity_names
+
+        if not self._ha_device_id:
+            _LOGGER.debug("Surface validation: no ha_device_id — skipping")
+            return []
+
+        try:
+            required_names = derive_required_entity_names(
+                self._registry_file,
+                selected_tier=self._selected_tier,
+            )
+        except Exception:
+            _LOGGER.error(
+                "Surface validation: unexpected error deriving required entity names "
+                "from registry %s — blocking adoption (fail-closed)",
+                self._registry_file,
+                exc_info=True,
+            )
+            return None  # fail-closed: unexpected error → block
+
+        if required_names is None:
+            # derive_required_entity_names signals registry load failure.
+            # For known models the bundled registry must always be present.
+            _LOGGER.error(
+                "Surface validation: cannot load registry %s — "
+                "blocking adoption (fail-closed, bundled defs unavailable)",
+                self._registry_file,
+            )
+            return None  # fail-closed: registry unavailable → block
+
+        if not required_names:
+            # Registry loaded but has no standard-tier required entities.
+            # This is technically valid for future models — skip validation.
+            _LOGGER.debug(
+                "Surface validation: registry %s yielded no required entities "
+                "— skipping (empty contract, not a load failure)",
+                self._registry_file,
+            )
+            return []
+
+        ent_reg = er.async_get(self.hass)
+        device_entities = er.async_entries_for_device(ent_reg, self._ha_device_id)
+
+        actual_names: set[str] = set()
+        for ent in device_entities:
+            if getattr(ent, "disabled_by", None) is not None:
+                continue
+            original = getattr(ent, "original_name", None)
+            if original:
+                actual_names.add(original)
+
+        missing = [name for name in required_names if name not in actual_names]
+        if missing:
+            _LOGGER.info(
+                "Surface validation: device %s missing %d required entities: %s",
+                self._ha_device_id,
+                len(missing),
+                missing[:5],
+            )
+        else:
+            _LOGGER.debug(
+                "Surface validation: device %s entity surface complete (%d checked)",
+                self._ha_device_id,
+                len(required_names),
+            )
+        return missing
+
     async def async_step_adopt_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -1364,6 +1447,50 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._device_id = device_id
             self._summary_title = f"PVAutonomy ({summary})"
             self._display_name = display_name
+
+            # #134: Entity-surface validator — inspect the selected ESPHome
+            # device's entity registry before accepting it.  Block adoption
+            # when required PVAutonomy entities are absent so that a renamed/
+            # incomplete firmware surface fails early with actionable guidance.
+            # None = validation could not be performed (broken installation).
+            missing = await self._validate_entity_surface()
+
+            if missing is None:
+                # Registry/contract unavailable: block adoption so a broken
+                # installation cannot silently produce an unvalidated entry.
+                return self.async_show_form(
+                    step_id="adopt_confirm",
+                    data_schema=vol.Schema({}),
+                    description_placeholders={
+                        "device_name": summary,
+                        "device_id": device_id,
+                        "registry_file": self._registry_file,
+                        "manufacturer": self._manufacturer.title(),
+                        "model": display_name,
+                        "mac_suffix": self._mac_suffix or "(not bound)",
+                        "missing_entities": "",
+                    },
+                    errors={"base": "entity_surface_validation_failed"},
+                )
+
+            if missing:
+                truncated = missing[:5]
+                suffix = f" … (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+                missing_str = ", ".join(truncated) + suffix
+                return self.async_show_form(
+                    step_id="adopt_confirm",
+                    data_schema=vol.Schema({}),
+                    description_placeholders={
+                        "device_name": summary,
+                        "device_id": device_id,
+                        "registry_file": self._registry_file,
+                        "manufacturer": self._manufacturer.title(),
+                        "model": display_name,
+                        "mac_suffix": self._mac_suffix or "(not bound)",
+                        "missing_entities": missing_str,
+                    },
+                    errors={"base": "missing_required_entities"},
+                )
 
             return self.async_create_entry(
                 title=self._summary_title,
@@ -1420,6 +1547,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "manufacturer": self._manufacturer.title(),
                 "model": display_name,
                 "mac_suffix": self._mac_suffix or "(not bound)",
+                "missing_entities": "",
             },
         )
 
