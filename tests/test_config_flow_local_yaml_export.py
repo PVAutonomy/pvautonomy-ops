@@ -61,11 +61,15 @@ def _make_flow(
     site: str = "home",
     number: int = 1,
     registry_file: str = "inverter-registry/sph10k.yaml",
+    local_yaml_mode: bool = False,
+    adopt_mode: bool = True,
 ) -> PVAutonomyOpsConfigFlow:
     """Return a PVAutonomyOpsConfigFlow stub for local YAML export tests.
 
     Uses __new__ to bypass __init__ (which imports DeviceMetadata).
     hass.config.path returns a string suitable for Path() wrapping.
+
+    local_yaml_mode: True for local_esphome (YAML export), False for adopt_direct.
     """
     flow = PVAutonomyOpsConfigFlow.__new__(PVAutonomyOpsConfigFlow)
 
@@ -77,7 +81,8 @@ def _make_flow(
     flow._build_result = None
     flow._flash_error = None
     flow._display_name = "test-device"
-    flow._adopt_mode = True  # local_esphome sets adopt_mode=True
+    flow._adopt_mode = adopt_mode
+    flow._local_yaml_mode = local_yaml_mode
     flow._build_service_mode = build_service_mode
     flow._proxy_base_url = ""
     flow._proxy_api_key = ""
@@ -117,8 +122,8 @@ def _make_yaml_generator_stub(yaml_content: str = "placeholder_yaml: true"):
 
 
 def test_location_routes_to_local_yaml_ready_in_local_mode():
-    """In LOCAL_ESPHOME mode, async_step_location must call local_yaml_ready."""
-    flow = _make_flow(build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME)
+    """In LOCAL_ESPHOME mode with _local_yaml_mode=True, location must call local_yaml_ready."""
+    flow = _make_flow(build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME, local_yaml_mode=True)
     _make_yaml_generator_stub("api_encryption_key: !secret api_encryption_key\nota_password: !secret ota_password")
 
     with patch.object(flow, "async_step_local_yaml_ready", new=AsyncMock(
@@ -364,7 +369,7 @@ def test_local_yaml_ready_does_not_call_preflight(tmp_path):
 
 def test_location_local_mode_does_not_call_preflight():
     """async_step_location in local mode must not call _preflight_compile_secret_key."""
-    flow = _make_flow(build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME)
+    flow = _make_flow(build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME, local_yaml_mode=True)
     flow._preflight_compile_secret_key = AsyncMock(return_value=True)
     _make_yaml_generator_stub("placeholder: true")
 
@@ -414,3 +419,115 @@ def test_local_yaml_ready_graceful_on_generation_failure(tmp_path):
     placeholders = result.get("description_placeholders") or {}
     # Fallback placeholder must be set when generation fails
     assert placeholders.get("yaml_path") == "(generation failed — check logs)"
+
+
+# ---------------------------------------------------------------------------
+# fix/#136 — Adopt Direct location-step routing
+# ---------------------------------------------------------------------------
+
+
+def test_location_routes_to_local_yaml_ready_when_local_yaml_mode_true():
+    """local_esphome path (_local_yaml_mode=True) must route location → local_yaml_ready.
+
+    Regression guard: the fix must not break the Local ESPHome YAML export path.
+    """
+    flow = _make_flow(build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME, local_yaml_mode=True)
+    _make_yaml_generator_stub()
+
+    with patch.object(
+        flow, "async_step_local_yaml_ready",
+        new=AsyncMock(return_value={"type": "form", "step_id": "local_yaml_ready"})
+    ) as mock_local:
+        result = _run(flow.async_step_location(user_input={
+            "site_preset": "custom",
+            "site": "home",
+            "number": 1,
+        }))
+
+    mock_local.assert_awaited_once()
+    assert result["step_id"] == "local_yaml_ready"
+
+
+def test_location_routes_to_target_device_when_local_yaml_mode_false():
+    """adopt_direct path (_local_yaml_mode=False) must route location → target_device.
+
+    This is the #136 fix: adopt_direct sets _local_yaml_mode=False so the
+    location step goes to target_device instead of local_yaml_ready.
+    """
+    flow = _make_flow(
+        build_service_mode=BUILD_SERVICE_LOCAL_ESPHOME,
+        local_yaml_mode=False,
+        adopt_mode=True,
+    )
+
+    with patch.object(
+        flow, "async_step_target_device",
+        new=AsyncMock(return_value={"type": "form", "step_id": "target_device"})
+    ) as mock_target:
+        result = _run(flow.async_step_location(user_input={
+            "site_preset": "custom",
+            "site": "home",
+            "number": 1,
+        }))
+
+    mock_target.assert_awaited_once()
+    assert result["step_id"] == "target_device"
+
+
+def test_adopt_direct_step_sets_local_yaml_mode_false():
+    """async_step_adopt_direct must leave _local_yaml_mode=False (default).
+
+    adopt_direct never sets _local_yaml_mode, so the routing uses False and
+    routes location → target_device instead of local_yaml_ready.
+    """
+    from custom_components.pvautonomy_ops.config_flow import PVAutonomyOpsConfigFlow
+    from custom_components.pvautonomy_ops.const import BUILD_SERVICE_LOCAL_ESPHOME
+
+    flow = PVAutonomyOpsConfigFlow.__new__(PVAutonomyOpsConfigFlow)
+    flow.hass = MagicMock()
+    flow._adopt_mode = False
+    flow._local_yaml_mode = False
+    flow._build_service_mode = ""
+    flow._proxy_base_url = ""
+    flow._proxy_api_key = ""
+    flow._proxy_customer_id = ""
+
+    with patch.object(
+        flow, "async_step_manufacturer",
+        new=AsyncMock(return_value={"type": "form", "step_id": "manufacturer"})
+    ):
+        _run(flow.async_step_adopt_direct())
+
+    # adopt_direct must NOT set _local_yaml_mode=True
+    assert flow._local_yaml_mode is False, "adopt_direct must not set _local_yaml_mode=True"
+    assert flow._adopt_mode is True
+    assert flow._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME
+
+
+def test_local_esphome_step_sets_local_yaml_mode_true():
+    """async_step_local_esphome must set _local_yaml_mode=True.
+
+    This ensures the YAML export routing fires when the user chose the
+    Local ESPHome path (not Adopt Direct).
+    """
+    from custom_components.pvautonomy_ops.config_flow import PVAutonomyOpsConfigFlow
+    from custom_components.pvautonomy_ops.const import BUILD_SERVICE_LOCAL_ESPHOME
+
+    flow = PVAutonomyOpsConfigFlow.__new__(PVAutonomyOpsConfigFlow)
+    flow.hass = MagicMock()
+    flow._adopt_mode = False
+    flow._local_yaml_mode = False
+    flow._build_service_mode = ""
+    flow._proxy_base_url = ""
+    flow._proxy_api_key = ""
+    flow._proxy_customer_id = ""
+
+    with patch.object(
+        flow, "async_step_local_esphome_guide",
+        new=AsyncMock(return_value={"type": "form", "step_id": "local_esphome_guide"})
+    ):
+        _run(flow.async_step_local_esphome())
+
+    assert flow._local_yaml_mode is True, "local_esphome must set _local_yaml_mode=True"
+    assert flow._adopt_mode is True
+    assert flow._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME

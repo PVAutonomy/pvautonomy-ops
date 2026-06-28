@@ -266,6 +266,10 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # device WITHOUT any build/install/reflash. Set from the first-screen
         # menu; routes target_device → adopt_confirm instead of the build path.
         self._adopt_mode: bool = False
+        # Local ESPHome YAML export mode: True only when local_esphome is
+        # selected (not adopt_direct). Both paths share BUILD_SERVICE_LOCAL_ESPHOME
+        # but only local_esphome should route location → local_yaml_ready.
+        self._local_yaml_mode: bool = False
         # Build service mode (#128): records which UX path created this entry.
         # Default = managed (pva_ key + DEFAULT_PROXY_BASE_URL); overridden by
         # the mode-selector step before any proxy/key collection happens.
@@ -343,6 +347,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Menu target: Local ESPHome / build yourself."""
         self._adopt_mode = True
+        self._local_yaml_mode = True
         self._build_service_mode = BUILD_SERVICE_LOCAL_ESPHOME
         self._proxy_base_url = ""
         self._proxy_api_key = ""
@@ -719,7 +724,10 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._site = site
                 self._number = number
-                if self._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME:
+                # LOCAL_ESPHOME mode is shared by local_esphome (YAML export) and
+                # adopt_direct (register running device). Only route to YAML export
+                # when _local_yaml_mode is True (set by local_esphome, not adopt_direct).
+                if getattr(self, "_local_yaml_mode", False):
                     return await self.async_step_local_yaml_ready()
                 return await self.async_step_target_device()
 
