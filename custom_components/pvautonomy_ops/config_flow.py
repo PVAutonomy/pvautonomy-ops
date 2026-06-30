@@ -2194,6 +2194,126 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 # ============================================================================
 
 
+def _build_settings_schema(
+    mode: str | None,
+    options: dict[str, Any],
+    device_options: dict[str, str],
+) -> vol.Schema:
+    """Build the mode-aware Options-flow "settings" schema (#138).
+
+    ``mode`` is the persisted ``build_service_mode`` from the config entry
+    (``managed`` / ``local_esphome`` / ``self_hosted``). Field visibility hides
+    mode-internal fields from normal Managed/Local users while preserving
+    advanced/self-hosted configurability:
+
+    - generic runtime options (device, poll interval, channel, OTA, cache,
+      proxy_auto_refresh) — visible in all modes;
+    - ``proxy_api_key`` — visible for Managed (Build-Key rotation) + Self-hosted
+      (and legacy-safe); hidden for Local/Adopt;
+    - ``proxy_base_url`` / ``proxy_customer_id`` / ``build_backend`` — self-hosted
+      internals; visible only for Self-hosted (and legacy-safe);
+    - ``simulated_failure_mode`` — dev/diagnostic; hidden in ALL modes.
+
+    An unknown/missing mode (legacy/imported entries) is treated legacy-safe:
+    all proxy-relevant fields are shown so an old config never becomes
+    uneditable. Hidden fields are never wiped — the caller merges on submit.
+    """
+    is_known_mode = mode in (
+        BUILD_SERVICE_MANAGED,
+        BUILD_SERVICE_LOCAL_ESPHOME,
+        BUILD_SERVICE_SELF_HOSTED,
+    )
+    is_legacy = not is_known_mode
+    show_api_key = (
+        mode == BUILD_SERVICE_MANAGED
+        or mode == BUILD_SERVICE_SELF_HOSTED
+        or is_legacy
+    )
+    show_proxy_internals = mode == BUILD_SERVICE_SELF_HOSTED or is_legacy
+
+    schema: dict[Any, Any] = {
+        vol.Optional(
+            CONF_SELECTED_DEVICE,
+            default=options.get(CONF_SELECTED_DEVICE, ""),
+        ): vol.In(device_options),
+        vol.Optional(
+            CONF_POLL_INTERVAL,
+            default=options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+        ): vol.All(int, vol.Range(min=10, max=300)),
+        vol.Optional(
+            CONF_ARTIFACT_CHANNEL,
+            default=options.get(CONF_ARTIFACT_CHANNEL, DEFAULT_ARTIFACT_CHANNEL),
+        ): vol.In(["stable", "beta"]),
+    }
+
+    if show_api_key:
+        schema[
+            vol.Optional(
+                CONF_PROXY_API_KEY,
+                default=options.get(CONF_PROXY_API_KEY, DEFAULT_PROXY_API_KEY),
+            )
+        ] = str
+    if show_proxy_internals:
+        schema[
+            vol.Optional(
+                CONF_PROXY_BASE_URL,
+                default=options.get(CONF_PROXY_BASE_URL, DEFAULT_PROXY_BASE_URL),
+            )
+        ] = str
+        schema[
+            vol.Optional(
+                CONF_PROXY_CUSTOMER_ID,
+                default=options.get(
+                    CONF_PROXY_CUSTOMER_ID, DEFAULT_PROXY_CUSTOMER_ID
+                ),
+            )
+        ] = str
+
+    schema[
+        vol.Optional(
+            CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
+            default=options.get(
+                CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
+                DEFAULT_PROXY_AUTO_REFRESH,
+            ),
+        )
+    ] = bool
+    schema[
+        vol.Optional(
+            CONF_OTA_RETRIES,
+            default=options.get(CONF_OTA_RETRIES, DEFAULT_OTA_RETRIES),
+        )
+    ] = vol.All(int, vol.Range(min=0, max=10))
+    schema[
+        vol.Optional(
+            CONF_OTA_RETRY_DELAYS,
+            default=options.get(CONF_OTA_RETRY_DELAYS, DEFAULT_OTA_RETRY_DELAYS),
+        )
+    ] = str
+    schema[
+        vol.Optional(
+            CONF_CACHE_KEEP_BUILDS,
+            default=options.get(CONF_CACHE_KEEP_BUILDS, DEFAULT_CACHE_KEEP_BUILDS),
+        )
+    ] = vol.All(int, vol.Range(min=1, max=100))
+
+    if show_proxy_internals:
+        schema[
+            vol.Optional(
+                CONF_BUILD_BACKEND,
+                default=options.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND),
+            )
+        ] = vol.In([
+            "proxy_remote", "simulated", "builder_addon",
+            "esphome_dashboard", "manual",
+        ])
+
+    # CONF_SIMULATED_FAILURE_MODE is intentionally NOT exposed in any mode
+    # (dev/diagnostic only); existing stored values are preserved on submit.
+
+    return vol.Schema(schema)
+
+
 class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
     """Options flow with structured menu.
 
@@ -2240,72 +2360,12 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
                 "Could not load device list for options flow", exc_info=True
             )
 
+        # #138: mode-aware Options-flow — see _build_settings_schema. Hidden
+        # fields are NOT wiped (async_step_settings merges on submit above).
+        mode = self.config_entry.data.get(CONF_BUILD_SERVICE_MODE)
         return self.async_show_form(
             step_id="settings",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_SELECTED_DEVICE,
-                        default=options.get(CONF_SELECTED_DEVICE, ""),
-                    ): vol.In(device_options),
-                    vol.Optional(
-                        CONF_POLL_INTERVAL,
-                        default=options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
-                    ): vol.All(int, vol.Range(min=10, max=300)),
-                    vol.Optional(
-                        CONF_ARTIFACT_CHANNEL,
-                        default=options.get(CONF_ARTIFACT_CHANNEL, DEFAULT_ARTIFACT_CHANNEL),
-                    ): vol.In(["stable", "beta"]),
-                    # Proxy settings
-                    vol.Optional(
-                        CONF_PROXY_BASE_URL,
-                        default=options.get(CONF_PROXY_BASE_URL, DEFAULT_PROXY_BASE_URL),
-                    ): str,
-                    vol.Optional(
-                        CONF_PROXY_API_KEY,
-                        default=options.get(CONF_PROXY_API_KEY, DEFAULT_PROXY_API_KEY),
-                    ): str,
-                    vol.Optional(
-                        CONF_PROXY_CUSTOMER_ID,
-                        default=options.get(CONF_PROXY_CUSTOMER_ID, DEFAULT_PROXY_CUSTOMER_ID),
-                    ): str,
-                    vol.Optional(
-                        CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
-                        default=options.get(
-                            CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
-                            DEFAULT_PROXY_AUTO_REFRESH,
-                        ),
-                    ): bool,
-                    # OTA robustness
-                    vol.Optional(
-                        CONF_OTA_RETRIES,
-                        default=options.get(CONF_OTA_RETRIES, DEFAULT_OTA_RETRIES),
-                    ): vol.All(int, vol.Range(min=0, max=10)),
-                    vol.Optional(
-                        CONF_OTA_RETRY_DELAYS,
-                        default=options.get(CONF_OTA_RETRY_DELAYS, DEFAULT_OTA_RETRY_DELAYS),
-                    ): str,
-                    vol.Optional(
-                        CONF_CACHE_KEEP_BUILDS,
-                        default=options.get(CONF_CACHE_KEEP_BUILDS, DEFAULT_CACHE_KEEP_BUILDS),
-                    ): vol.All(int, vol.Range(min=1, max=100)),
-                    # Build backend (advanced)
-                    vol.Optional(
-                        CONF_BUILD_BACKEND,
-                        default=options.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND),
-                    ): vol.In([
-                        "proxy_remote", "simulated", "builder_addon",
-                        "esphome_dashboard", "manual",
-                    ]),
-                    vol.Optional(
-                        CONF_SIMULATED_FAILURE_MODE,
-                        default=options.get(
-                            CONF_SIMULATED_FAILURE_MODE,
-                            DEFAULT_SIMULATED_FAILURE_MODE,
-                        ),
-                    ): vol.In(["none", "fail_compile", "timeout", "missing_artifact"]),
-                }
-            ),
+            data_schema=_build_settings_schema(mode, options, device_options),
         )
 
     # ------------------------------------------------------------------
