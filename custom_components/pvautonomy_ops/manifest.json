@@ -7,8 +7,6 @@
   "requirements": [],
   "dependencies": [],
   "config_flow": true,
-  "codeowners": [
-    "@gshubi"
-  ],
+  "codeowners": ["@gshubi"],
   "iot_class": "local_polling"
 }
