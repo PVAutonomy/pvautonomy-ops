@@ -861,6 +861,17 @@ async def load_or_refresh_keyset(
     if root_pubkeys is None:
         root_pubkeys = ROOT_PUBKEYS_PINNED
 
+    # Re-verification floor for a document we may already have accepted:
+    # between rotations the proxy re-serves the CURRENT keyset, so both the
+    # fresh fetch and the cache-recovery path must idempotently re-accept
+    # serial == stored fence. Verifying against fence-1 keeps true rollbacks
+    # rejected (`serial <= fence-1` ⟺ `serial < fence`) while allowing the
+    # steady-state equal serial (#151 A0: the old fresh path passed the raw
+    # fence and fail-closed every managed build after the first).
+    reverify_floor = (
+        cache.stored_max_serial - 1 if cache.stored_max_serial >= 0 else -1
+    )
+
     fresh_error: KeysetVerificationError | None = None
     try:
         body = await fetch_signed_keyset(
@@ -869,7 +880,7 @@ async def load_or_refresh_keyset(
         verified = verify_signed_keyset(
             body,
             root_pubkeys=root_pubkeys,
-            stored_max_serial=cache.stored_max_serial,
+            stored_max_serial=reverify_floor,
             now=now,
             require_environment=require_environment,
         )
@@ -897,8 +908,7 @@ async def load_or_refresh_keyset(
         return verify_signed_keyset(
             cached,
             root_pubkeys=root_pubkeys,
-            stored_max_serial=cache.stored_max_serial - 1
-            if cache.stored_max_serial >= 0 else -1,
+            stored_max_serial=reverify_floor,
             now=now,
             require_environment=require_environment,
         )
