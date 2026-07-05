@@ -1381,10 +1381,10 @@ class ProxyRemoteBuildBackend(BuildBackend):
         self._refresh_attempted: set[str] = set()
         # EPIC-006-WP3-D2: auto-refresh gating (can be disabled via Options Flow)
         self._auto_refresh_enabled: bool = True
-        # EPIC-006 PR-3: HPKE compile_secret_envelope (Phase-2 opt-in).
-        # Default is the legacy plaintext-secrets-then-proxy-encrypts path.
-        # Envelope mode activates only when set_envelope_mode(enabled=True)
-        # has been called with a usable keyset cache and root anchors.
+        # EPIC-006 PR-3 / G6 (HPKE-4): HPKE compile_secret_envelope. Since G6
+        # the pipeline wires set_envelope_mode(enabled=True) with the pinned
+        # production root on the proxy_remote path; these fields stay off for
+        # backends nobody wires (and under the hidden operator force-disable).
         self._envelope_mode_enabled: bool = False
         self._envelope_keyset_cache: BuildBackendKeysetCache | None = None
         self._envelope_root_pubkeys: Mapping[str, bytes] | None = None
@@ -1472,9 +1472,8 @@ class ProxyRemoteBuildBackend(BuildBackend):
         * ``enabled=True``;
         * ``keyset_cache`` is a :class:`BuildBackendKeysetCache`;
         * ``root_pubkeys`` is a non-empty mapping of pinned Ed25519 roots
-          (defaults to :data:`ROOT_PUBKEYS_PINNED`, which is empty in this
-          PR — production envelope mode therefore stays unavailable until a
-          Judge-approved root-key ceremony task adds an anchor);
+          (defaults to :data:`ROOT_PUBKEYS_PINNED`, which since G6 pins
+          root-2026-a from the 2026-07-01 production ceremony);
         * the inbound build is on the ``yaml_authority`` build_contract;
         * a usable signed keyset is reachable (or 404/405 falls back legacy).
 
@@ -1595,6 +1594,9 @@ class ProxyRemoteBuildBackend(BuildBackend):
                 base_url=self._base_url,
                 api_key=self._api_key,
                 root_pubkeys=self._envelope_root_pubkeys,
+                # D-A binding stated explicitly at the production call site,
+                # not left to the library default (G6 review finding).
+                require_environment="production",
             )
         except KeysetEndpointUnsupported:
             # The single legitimate fallback condition (ADR §6.1).
@@ -1913,9 +1915,15 @@ class ProxyRemoteBuildBackend(BuildBackend):
                         "Proxy build queued: build_id=%s", build_id
                     )
                 return build_id, cache_hit
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            # TimeoutError: aiohttp's TOTAL timeout raises the builtin
+            # TimeoutError (== asyncio.TimeoutError on py3.11+), NOT a
+            # ClientError subclass — same confirmed failure class as the
+            # keyset-fetch fix from PR #148 (issue #153). Fail closed with
+            # a controlled BuildError, never a raw crash.
             raise BuildError(
-                f"Proxy unreachable — check network connection. ({exc})"
+                "Proxy unreachable or timed out — check network connection. "
+                f"({type(exc).__name__}: {exc})"
             ) from exc
 
     async def get_status(self, job_id: str) -> BuildStatus:
@@ -2024,9 +2032,12 @@ class ProxyRemoteBuildBackend(BuildBackend):
                         f"Proxy status query failed: HTTP {resp.status} — {body}"
                     )
                 return await resp.json()
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            # See start_build: builtin TimeoutError is not a ClientError
+            # (issue #153).
             raise BuildError(
-                f"Proxy unreachable — check network connection. ({exc})"
+                "Proxy unreachable or timed out — check network connection. "
+                f"({type(exc).__name__}: {exc})"
             ) from exc
 
     async def fetch_artifact(self, job_id: str, artifact_name: str) -> bytes:
@@ -2120,10 +2131,13 @@ class ProxyRemoteBuildBackend(BuildBackend):
                     chunks.append(chunk)
                     total_bytes += len(chunk)
 
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            # See start_build: builtin TimeoutError is not a ClientError
+            # (issue #153). A mid-stream timeout aborts hard — a partial
+            # download must never reach the flash path.
             raise BuildError(
-                f"Proxy unreachable during artifact download — "
-                f"check network connection. ({exc})"
+                "Proxy unreachable or timed out during artifact download — "
+                f"check network connection. ({type(exc).__name__}: {exc})"
             ) from exc
 
         # Verify size
@@ -2194,9 +2208,12 @@ class ProxyRemoteBuildBackend(BuildBackend):
                 if resp.status != 200:
                     raise BuildError(f"Proxy unhealthy: HTTP {resp.status}")
                 return await resp.json()
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            # See start_build: builtin TimeoutError is not a ClientError
+            # (issue #153).
             raise BuildError(
-                f"Proxy unreachable — check network connection. ({exc})"
+                "Proxy unreachable or timed out — check network connection. "
+                f"({type(exc).__name__}: {exc})"
             ) from exc
 
     async def whoami(self) -> dict[str, Any] | None:
@@ -2215,7 +2232,10 @@ class ProxyRemoteBuildBackend(BuildBackend):
                     return await resp.json()
                 _LOGGER.debug("/whoami returned HTTP %s (not available yet)", resp.status)
                 return None
-        except aiohttp.ClientError:
+        except (aiohttp.ClientError, TimeoutError):
+            # Includes builtin TimeoutError (see start_build; issue #153).
+            # /whoami is best-effort by contract, so both map to the
+            # graceful None.
             _LOGGER.debug("/whoami call failed (endpoint not available)")
             return None
 

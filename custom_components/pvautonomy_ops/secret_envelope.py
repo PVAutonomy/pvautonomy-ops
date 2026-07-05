@@ -77,11 +77,17 @@ ENVELOPE_FINGERPRINT_LEN: Final[int] = 12
 
 #: Pinned production root public keys (Ed25519, raw 32-byte form).
 #:
-#: This list is intentionally **empty** in this PR. Production envelope mode
-#: stays disabled until a real, Judge-approved root public key is added by a
-#: separate root-key ceremony task. Tests pass fixture roots directly to the
-#: verification helpers and must never mutate this constant.
-ROOT_PUBKEYS_PINNED: Final[dict[str, bytes]] = {}
+#: G6 (HPKE-4, ADR-0003): pins the PUBLIC verify key from the offline root
+#: ceremony of 2026-07-01 (G3). PUBLIC material only — the private root key
+#: never leaves the offline ceremony medium. Binding evidence:
+#: sha256(raw 32B) == 0831d9b3941c987a78f6dc9a5452beb84aea4ed29b7be8fb9e3fda37b1bdafac
+#: (enforced by test_production_root_anchor_root_2026a_pinned). Rotation per
+#: runbook G8: pin the successor alongside, retire the old key after client
+#: propagation. Tests pass fixture roots directly to the verification helpers
+#: and must never mutate this constant.
+ROOT_PUBKEYS_PINNED: Final[dict[str, bytes]] = {
+    "root-2026-a": base64.b64decode("gJBO4eXdO9x2wxT6z61x+6S5+e57Rz89+aVsaj4/Ybg="),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,7 @@ class VerifiedKeyset:
     issued_at: str
     expires_at: str
     expires_at_dt: datetime
+    environment: str | None = None
 
 
 def _parse_iso8601(value: str, *, field_name: str) -> datetime:
@@ -231,6 +238,7 @@ def verify_signed_keyset(
     root_pubkeys: Mapping[str, bytes],
     stored_max_serial: int,
     now: datetime | None = None,
+    require_environment: str | None = None,
 ) -> VerifiedKeyset:
     """Verify a ``GET /build-backend/keys`` response.
 
@@ -243,6 +251,11 @@ def verify_signed_keyset(
     4. ``keyset.alg_required`` matches HA's pinned ciphersuite.
     5. The named ``active_key_id`` exists in ``keys[]`` with alg
        :data:`HPKE_KEM_ALG` and a 32-byte raw public key.
+    6. When ``require_environment`` is given (G6, ADR-0003 D-A/D-E):
+       ``keyset.environment`` must exist and equal it exactly. Missing or
+       mismatching environment fails closed — a "test" keyset must never be
+       accepted where "production" is required, even though the proxy also
+       enforces this server-side (defense-in-depth).
 
     Args:
         response: Parsed JSON response body.
@@ -400,6 +413,17 @@ def verify_signed_keyset(
             "no signature verified against pinned root anchors",
         )
 
+    # ---- Environment binding (6) — D-A / ADR-0003 D-E. Runs AFTER the
+    # signature check so the environment claim is only ever judged on
+    # authenticated data: a forged response surfaces as a signature error,
+    # not as a misleading environment-mismatch diagnosis.
+    environment = keyset.get("environment")
+    if require_environment is not None and environment != require_environment:
+        raise KeysetVerificationError(
+            "keyset_environment_mismatch",
+            f"environment={environment!r} != required {require_environment!r}",
+        )
+
     return VerifiedKeyset(
         raw=dict(response),
         keyset=dict(keyset),
@@ -408,6 +432,7 @@ def verify_signed_keyset(
         issued_at=issued_at_str,
         expires_at=expires_at_str,
         expires_at_dt=expires_at,
+        environment=environment if isinstance(environment, str) else None,
     )
 
 
@@ -626,9 +651,10 @@ def open_envelope_for_test(
 def production_root_anchors_available() -> bool:
     """True iff at least one real production root pin is configured.
 
-    The current PR ships with no pinned production root (per the trust-anchor
-    safety rule). Envelope mode in production therefore stays unavailable
-    until a separate Judge-approved root-key ceremony task adds an anchor.
+    Since G6 (HPKE-4) this is True: root-2026-a from the G3 ceremony is
+    pinned in :data:`ROOT_PUBKEYS_PINNED`, making production envelope mode
+    reachable. Activation still requires the D-E runtime gates (wired
+    backend, verified production keyset; 404/405 keeps legacy fallback).
     """
     return bool(ROOT_PUBKEYS_PINNED)
 
@@ -799,7 +825,11 @@ async def fetch_signed_keyset(
         raise
     except KeysetVerificationError:
         raise
-    except aiohttp.ClientError as exc:
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        # TimeoutError: aiohttp's TOTAL timeout (read/body phase) raises the
+        # builtin TimeoutError (== asyncio.TimeoutError on py3.11+), NOT a
+        # ClientError subclass — without this clause it would escape the
+        # keyset_endpoint_error mapping AND the cache-recovery path.
         raise KeysetVerificationError(
             "keyset_endpoint_error",
             f"transport error: {type(exc).__name__}",
@@ -814,6 +844,7 @@ async def load_or_refresh_keyset(
     api_key: str,
     root_pubkeys: Mapping[str, bytes] | None = None,
     now: datetime | None = None,
+    require_environment: str | None = "production",
 ) -> VerifiedKeyset:
     """Fetch + verify a fresh keyset; on transport failure, try the cache.
 
@@ -840,6 +871,7 @@ async def load_or_refresh_keyset(
             root_pubkeys=root_pubkeys,
             stored_max_serial=cache.stored_max_serial,
             now=now,
+            require_environment=require_environment,
         )
         await cache.async_record_accepted_keyset(verified)
         return verified
@@ -868,12 +900,15 @@ async def load_or_refresh_keyset(
             stored_max_serial=cache.stored_max_serial - 1
             if cache.stored_max_serial >= 0 else -1,
             now=now,
+            require_environment=require_environment,
         )
-    except KeysetVerificationError:
-        # Cache is unusable (expired, root rotated out). Surface fresh error.
+    except KeysetVerificationError as cache_exc:
+        # Cache is unusable (expired, root rotated out, environment
+        # mismatch). Surface the fresh transport error, chaining the cache
+        # rejection so its code stays visible in the traceback.
         if fresh_error is None:
             raise
-        raise fresh_error
+        raise fresh_error from cache_exc
 
 
 __all__ = [

@@ -7,7 +7,7 @@ All entity IDs defined here - NO hardcodes elsewhere.
 
 # Integration metadata
 DOMAIN = "pvautonomy_ops"
-VERSION = "0.4.28"
+VERSION = "0.4.29"
 CONTRACT_VERSION = "v1.0.0"
 
 # Update interval (seconds)
@@ -373,13 +373,16 @@ MODBUS_VERSION_UNKNOWN: None = None
 # ============================================================================
 # Secret-Blind Proxy Envelope (EPIC-006 PR-3)
 # ============================================================================
-# Phase-2 opt-in flag for HPKE compile_secret_envelope path.
-# Default OFF: legacy payload.encrypted_secrets is the customer-safe baseline
-# until production root pins land via a Judge-approved root-key ceremony.
-# Concrete schema/constants live in secret_envelope.py.
+# Hidden operator force-disable for the HPKE compile_secret_envelope path
+# (G6, ADR-0003 D-E). Default ON: with root-2026-a pinned (G3 ceremony) the
+# managed proxy_remote path seals envelopes whenever a verified production
+# keyset is served; the proxy's 404 keeps legacy fallback available where the
+# keyset is unset (killswitch, runbook G8). Setting this flag to False in the
+# entry data force-disables envelope mode without a release. Not exposed in
+# any UI. Concrete schema/constants live in secret_envelope.py.
 
 CONF_ENVELOPE_MODE_ENABLED = "envelope_mode_enabled"
-DEFAULT_ENVELOPE_MODE_ENABLED = False
+DEFAULT_ENVELOPE_MODE_ENABLED = True
 
 # build_contract value that the GHA decoder requires for envelope mode
 # (per ADR §6.3.1: yaml_authority is the only path that can produce a

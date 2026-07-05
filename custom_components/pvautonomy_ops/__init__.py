@@ -25,6 +25,7 @@ from .const import (
     CONF_ARTIFACT_OWNER,
     CONF_ARTIFACT_REPO,
     CONF_BUILD_BACKEND,
+    CONF_ENVELOPE_MODE_ENABLED,
     CONF_FLASH_MIN_SIZE_KB,
     CONF_GATES_FRESHNESS_MIN,
     CONF_MAP_CONFIRMED,
@@ -44,6 +45,7 @@ from .const import (
     DEFAULT_ARTIFACT_OWNER,
     DEFAULT_ARTIFACT_REPO,
     DEFAULT_BUILD_BACKEND,
+    DEFAULT_ENVELOPE_MODE_ENABLED,
     DEFAULT_FLASH_MIN_SIZE_KB,
     DEFAULT_GATES_FRESHNESS_MIN,
     DEFAULT_POLL_INTERVAL,
@@ -134,6 +136,12 @@ def get_runtime_config(entry: ConfigEntry) -> dict:
         CONF_STRICT_GATES: opts.get(CONF_STRICT_GATES, DEFAULT_STRICT_GATES),
         CONF_BUILD_BACKEND: opts.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND),
         CONF_SIMULATED_FAILURE_MODE: opts.get(CONF_SIMULATED_FAILURE_MODE, DEFAULT_SIMULATED_FAILURE_MODE),
+        # G6 (ADR-0003 D-E): hidden envelope force-disable. Options win;
+        # entry.data is honored so an operator storage-edit works either way.
+        CONF_ENVELOPE_MODE_ENABLED: opts.get(
+            CONF_ENVELOPE_MODE_ENABLED,
+            entry.data.get(CONF_ENVELOPE_MODE_ENABLED, DEFAULT_ENVELOPE_MODE_ENABLED),
+        ),
         # Proxy Remote Build Backend (EPIC-005-D1)
         CONF_PROXY_BASE_URL: opts.get(CONF_PROXY_BASE_URL, DEFAULT_PROXY_BASE_URL),
         CONF_PROXY_API_KEY: opts.get(CONF_PROXY_API_KEY, DEFAULT_PROXY_API_KEY),

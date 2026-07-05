@@ -16,6 +16,7 @@ Ref: WORKER-PROMPT-P3-12-001, Phase A3c.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -44,6 +45,8 @@ from .const import (
     BUILDER_ADDON_DEFAULT_PORT,
     BUILDER_ADDON_TIMEOUT,
     BUILDER_POLL_INTERVAL,
+    CONF_ENVELOPE_MODE_ENABLED,
+    DEFAULT_ENVELOPE_MODE_ENABLED,
     DEFAULT_HARDWARE_MODEL,
     DOMAIN,
     ESPHOME_COMPILE_TIMEOUT,
@@ -53,9 +56,73 @@ from .const import (
     TIER_STANDARD,
 )
 from .device_id import compute_device_id, compute_node_name
+from .secret_envelope import ROOT_PUBKEYS_PINNED, BuildBackendKeysetCache
 from .yaml_generator import YamlGenerationError, generate_device_yaml
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _flag_enabled(value: Any) -> bool:
+    """Coerce an operator-set flag value to bool, incident-tolerantly.
+
+    A storage-edited killswitch may arrive as the JSON boolean false or as a
+    hand-typed string; treating "false"/"0"/"off"/"no" as truthy would defeat
+    the one flag that exists for emergencies (G8 runbook).
+    """
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "off", "no", "")
+    return bool(value)
+
+
+def _envelope_mode_enabled(hass: HomeAssistant, config: dict) -> bool:
+    """Resolve the hidden envelope force-disable (G6, ADR-0003 D-E).
+
+    The entry-scoped path carries CONF_ENVELOPE_MODE_ENABLED in ``config``
+    (whitelisted in get_runtime_config from entry options/data). The
+    entry-free wizard path cannot: its proxy_config holds only the proxy
+    credentials, so fall back to scanning existing entries — an explicit
+    False on ANY entry force-disables (killswitch semantics, operator set
+    it during an incident and the wizard build must honor it too).
+    """
+    if CONF_ENVELOPE_MODE_ENABLED in config:
+        return _flag_enabled(config[CONF_ENVELOPE_MODE_ENABLED])
+    # Defensive: the resolver must never crash a build (graceful degradation,
+    # CLAUDE.md §4.4) — a hass without config_entries (degraded runtime,
+    # minimal test harness) resolves to the shipped default.
+    config_entries = getattr(hass, "config_entries", None)
+    if config_entries is None:
+        return DEFAULT_ENVELOPE_MODE_ENABLED
+    for entry in config_entries.async_entries(DOMAIN):
+        for source in (entry.options, entry.data):
+            if CONF_ENVELOPE_MODE_ENABLED in source and not _flag_enabled(
+                source[CONF_ENVELOPE_MODE_ENABLED]
+            ):
+                return False
+    return DEFAULT_ENVELOPE_MODE_ENABLED
+
+
+async def _get_keyset_cache(hass: HomeAssistant) -> BuildBackendKeysetCache:
+    """Domain-level singleton BuildBackendKeysetCache (G6).
+
+    MUST be one instance per hass: the wizard build path is entry-free and
+    runs outside the per-entry OperationLocks, so concurrent builds holding
+    separate cache instances over the same Store would clobber each other
+    via whole-dict last-writer-wins saves — regressing the anti-rollback
+    serial fence (async_record_envelope_used persists the instance's stale
+    stored_max_serial alongside the audit fields).
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    cache = domain_data.get("keyset_cache")
+    if cache is None:
+        lock = domain_data.setdefault("keyset_cache_lock", asyncio.Lock())
+        async with lock:
+            cache = domain_data.get("keyset_cache")
+            if cache is None:
+                cache = BuildBackendKeysetCache(hass)
+                await cache.async_load()
+                domain_data["keyset_cache"] = cache
+    return cache
+
 
 # HA event names
 EVENT_BUILD_STAGE = f"{DOMAIN}_build_stage"
@@ -311,6 +378,21 @@ async def run_build_pipeline(
             compile_key_source,
             mask_key(compile_secret_key),
         )
+        # G6 (ADR-0003 D-E, HPKE-4): wire the compile_secret_envelope path.
+        # Wiring only makes envelope mode reachable — the activation gates
+        # (pinned roots, yaml_authority, verified production keyset, 404/405
+        # legacy fallback) live in build_backend.start_build(); see
+        # const.CONF_ENVELOPE_MODE_ENABLED for the force-disable contract.
+        if _envelope_mode_enabled(hass, config):
+            backend.set_envelope_mode(
+                enabled=True,
+                keyset_cache=await _get_keyset_cache(hass),
+                root_pubkeys=ROOT_PUBKEYS_PINNED,
+            )
+        else:
+            _LOGGER.info(
+                "Envelope mode force-disabled via %s", CONF_ENVELOPE_MODE_ENABLED
+            )
         # Set proxy-specific build context
         # "model" → hardware platform (e.g. "edge101"), NOT inverter slug ("mic600").
         # Proxy interprets "model" as compile target / board family.
