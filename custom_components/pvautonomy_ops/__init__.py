@@ -1879,19 +1879,37 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # configuration gap. The backend fail-closed guard remains as defence-in-
         # depth; this check prevents the unnecessary YAML generation, health
         # check, and pipeline setup that would otherwise precede it.
+        #
+        # G7 (#122): envelope-mode builds seal per-device compile secrets into
+        # the HPKE envelope and need no repo-wide COMPILE_SECRET_KEY — the
+        # G6/G7 target state is exactly "no COMPILE_SECRET_KEY on the HA".
+        # Require the legacy key only when the envelope path cannot activate
+        # for this build (force-disabled via CONF_ENVELOPE_MODE_ENABLED, or no
+        # pinned roots). The decision reuses the pipeline's own resolver with
+        # the same entry runtime config, so preflight and build wiring can
+        # never disagree. If an envelope build later degrades to the legacy
+        # wire path (keyset 404/405), build_backend.start_build() still fails
+        # closed before any plaintext leaves HA
+        # (compile_secret_key_missing_or_invalid).
         from .keyring import COMPILE_SECRET_KEY_RE, PVAutonomyKeyring
+        from .pipeline import _envelope_mode_enabled
+        from .secret_envelope import ROOT_PUBKEYS_PINNED
 
-        _keyring = entry_data.get("keyring")
-        if _keyring is None:
-            _keyring = PVAutonomyKeyring(hass)
-            await _keyring.async_load()
-        _csk = await _keyring.get_compile_secret_key()
-        if not _csk or not COMPILE_SECRET_KEY_RE.match(_csk):
-            raise HomeAssistantError(
-                "Build encryption is not configured. Please complete "
-                "PVAutonomy operator provisioning (COMPILE_SECRET_KEY) "
-                "before starting a firmware build."
-            )
+        _envelope_possible = bool(ROOT_PUBKEYS_PINNED) and _envelope_mode_enabled(
+            hass, entry_data.get("config") or {}
+        )
+        if not _envelope_possible:
+            _keyring = entry_data.get("keyring")
+            if _keyring is None:
+                _keyring = PVAutonomyKeyring(hass)
+                await _keyring.async_load()
+            _csk = await _keyring.get_compile_secret_key()
+            if not _csk or not COMPILE_SECRET_KEY_RE.match(_csk):
+                raise HomeAssistantError(
+                    "Build encryption is not configured. Please complete "
+                    "PVAutonomy operator provisioning (COMPILE_SECRET_KEY) "
+                    "before starting a firmware build."
+                )
 
         operation_runner = entry_data["operation_runner"]
         operation_tracker = entry_data["operation_tracker"]

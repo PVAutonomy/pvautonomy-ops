@@ -1717,11 +1717,26 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return key if (key and _valid_key_re.match(key)) else None
 
     async def _preflight_compile_secret_key(self) -> bool:
-        """Return True if a valid COMPILE_SECRET_KEY is provisioned in the keyring.
+        """Return True if the build can start: envelope mode active, or a
+        valid COMPILE_SECRET_KEY provisioned in the keyring.
 
-        Delegates validation to _get_compile_secret_key (mockable seam).
-        Does not log or expose the key value.
+        G7 (#122): envelope-mode builds seal per-device compile secrets into
+        the HPKE envelope and need no repo-wide COMPILE_SECRET_KEY. The wizard
+        path is entry-free, so resolve exactly like the pipeline's wizard
+        branch: pinned roots plus the CONF_ENVELOPE_MODE_ENABLED entry-scan
+        (an explicit False on any entry force-disables). If an envelope build
+        later degrades to the legacy wire path (keyset 404/405),
+        build_backend.start_build() still fails closed before any plaintext
+        leaves HA.
+
+        Legacy path delegates validation to _get_compile_secret_key (mockable
+        seam). Does not log or expose the key value.
         """
+        from .pipeline import _envelope_mode_enabled
+        from .secret_envelope import ROOT_PUBKEYS_PINNED
+
+        if ROOT_PUBKEYS_PINNED and _envelope_mode_enabled(self.hass, {}):
+            return True
         key = await self._get_compile_secret_key()
         if not key:
             _LOGGER.warning(
