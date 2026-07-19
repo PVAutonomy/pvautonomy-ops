@@ -89,6 +89,13 @@
           "selected_tier": "Feature level"
         }
       },
+      "tier_map_blocked": {
+        "title": "Feature Level Not Available",
+        "description": "You selected **{requested_tier}**, but the register map check returned contradictory results for this device.\n\nFor safety, only **Standard** (Monitoring + APR) is available until the register map can be verified.\n\nYou can continue with Standard or cancel the setup.",
+        "data": {
+          "action": "Action"
+        }
+      },
       "unsafe_consent": {
         "title": "Expert mode — explicit consent required",
         "description": "These settings can cause permanent device or battery damage if used incorrectly. Examples: inverter on/off, BMS unlock, password registers.\n\nTo continue:\n1) Tick the checkbox\n2) Enter exactly: **{consent_phrase}**\n\nBy proceeding, you accept full responsibility for any consequences.",
@@ -180,6 +187,20 @@
     }
   },
   "entity": {
+    "sensor": {
+      "grid_power": {
+        "name": "Grid Power"
+      },
+      "grid_power_capability": {
+        "name": "Grid Power Capability",
+        "state": {
+          "not_configured": "Not configured",
+          "validating": "Validating",
+          "ready": "Ready",
+          "not_ready": "Not ready"
+        }
+      }
+    },
     "select": {
       "target_device": {
         "name": "Target device",
@@ -205,7 +226,8 @@
         "menu_options": {
           "settings": "Settings",
           "relocate": "Relocate Device",
-          "cleanup_entities": "Clean Up Old Entities"
+          "cleanup_entities": "Clean Up Old Entities",
+          "system_dashboard": "System Dashboard"
         }
       },
       "settings": {
@@ -280,15 +302,111 @@
       "cleanup_complete": {
         "title": "Cleanup Complete",
         "description": "Old prefixes: {old_prefixes}\n\n- Disabled: **{disabled}**\n- Deleted: **{deleted}**\n- Skipped (already disabled): **{skipped}**\n- Errors: **{errors}**\n\nCheck dashboards and automations for references to old entity IDs."
+      },
+      "sysdash_enabled": {
+        "title": "System Dashboard",
+        "description": "The PVAutonomy System Dashboard is currently **enabled** and managed automatically. To remove it, tick the box below. The dashboard will be removed and will not be recreated automatically; your device dashboards and the integration remain installed. You can turn it back on later here.",
+        "data": {
+          "confirm_disable": "Remove the System Dashboard and keep it off"
+        }
+      },
+      "sysdash_disabled": {
+        "title": "System Dashboard",
+        "description": "The PVAutonomy System Dashboard is currently **disabled**. To bring it back, tick the box below. It will be rebuilt from your current devices; any manual changes you had made to the removed dashboard are not restored, and your device dashboards are unaffected.",
+        "data": {
+          "confirm_enable": "Turn the System Dashboard back on"
+        }
+      },
+      "grid_menu": {
+        "title": "Grid Power",
+        "description": "Current state: **{capability_state}** ({reason}).\nDetected {candidate_count} power sensor(s); MQTT integration present: {mqtt}.\nChoose how to provide grid power (optional).\nSupported smart meters (SHRDZM) detected: {shrdzm_detected} ({shrdzm_usable} usable).",
+        "menu_options": {
+          "configure_signed_net": "Single signed net-power sensor",
+          "configure_split": "Separate import + export sensors",
+          "remove": "Remove Grid Power source",
+          "guide": "Help & recovery",
+          "configure_shrdzm": "Use detected smart meter (SHRDZM)"
+        }
+      },
+      "configure_signed_net": {
+        "title": "Signed net grid power",
+        "description": "Select one power sensor where positive = grid import and negative = grid export. Detected {candidate_count} candidate(s). You must confirm the sign convention to activate.",
+        "data": {
+          "source_entity": "Net power sensor",
+          "confirm_sign": "Positive = grid import, negative = grid export"
+        },
+        "data_description": {
+          "source_entity": "A sensor reporting signed grid power (W).",
+          "confirm_sign": "Required: confirm your sensor uses this sign convention."
+        }
+      },
+      "configure_split": {
+        "title": "Split import / export",
+        "description": "Select two non-negative power sensors: grid import and grid export. Grid power is computed as import − export.",
+        "data": {
+          "import_entity": "Grid import sensor",
+          "export_entity": "Grid export sensor"
+        },
+        "data_description": {
+          "import_entity": "Non-negative grid import power (W).",
+          "export_entity": "Non-negative grid export power (W)."
+        }
+      },
+      "grid_validate": {
+        "title": "Confirm Grid Power source",
+        "description": "Projected capability state: **{projected_state}** ({reason}).\nSources: {sources}\nReduced-durability (entity-id only) mapping: {degraded}.\nSubmit to save this mapping."
+      },
+      "remove": {
+        "title": "Remove Grid Power source",
+        "description": "Remove the current mapping and return Grid Power to the healthy *not configured* state. It will not be restored automatically. Current state: {capability_state}."
+      },
+      "guide": {
+        "title": "Grid Power help & recovery",
+        "description": "Current state: **{capability_state}** ({reason}).\n\n- **not_configured**: healthy — Grid Power is optional.\n- **not_ready** (stale): the source stopped updating — check the source device.\n- **not_ready** (sign): reconfigure signed-net and confirm the sign convention.\n- **not_ready** (source unresolved/missing): the mapped entity was renamed or removed — reconfigure to remap.\n- **not_ready** (pair_skew): import and export update too far apart — check both meters.\n\nSubmit to return to the menu.\n\nSHRDZM: {shrdzm_detected} detected, {shrdzm_usable} usable. If a meter is detected but not usable, it is missing channels (import 1.7.0 + export 2.7.0, or net 16.7.0) or the power metadata (device_class power, unit W)."
+      },
+      "shrdzm_select": {
+        "title": "Select SHRDZM smart meter",
+        "description": "Multiple supported SHRDZM smart meters were detected. Choose which one to use.",
+        "data": {
+          "device": "Smart meter"
+        }
+      },
+      "shrdzm_confirm": {
+        "title": "Confirm detected smart meter",
+        "description": "A compatible smart meter was found: **{label}** (mode: {mode}).\nProjected capability state: **{projected_state}** ({reason}).\nSubmit to accept the proposed mapping."
       }
     },
     "error": {
       "site_too_short": "Site name must be at least 2 characters.",
       "number_out_of_range": "Device number must be between 1 and 10.",
-      "cleanup_phrase_mismatch": "Confirmation phrase must be exactly: DELETE"
+      "cleanup_phrase_mismatch": "Confirmation phrase must be exactly: DELETE",
+      "sign_not_confirmed": "Please confirm the sign convention to activate Grid Power.",
+      "same_entity": "Import and export must be different entities."
     },
     "abort": {
-      "relocate_blocked": "Relocate is temporarily disabled. The current implementation cannot guarantee ESPHome encryption continuity — the device would appear as newly discovered without its encryption key, which is a security risk. This will be resolved in a future update."
+      "relocate_blocked": "Relocate is temporarily disabled. The current implementation cannot guarantee ESPHome encryption continuity — the device would appear as newly discovered without its encryption key, which is a security risk. This will be resolved in a future update.",
+      "system_dashboard_removed": "The System Dashboard has been removed and will stay off until you turn it back on here.",
+      "system_dashboard_enabled": "The System Dashboard has been turned back on and rebuilt.",
+      "system_dashboard_no_change": "No change was made to the System Dashboard.",
+      "system_dashboard_partial": "The System Dashboard was removed, but a final cleanup step did not finish. It remains off; you can run this again to complete it.",
+      "system_dashboard_ambiguous": "The System Dashboard could not be removed automatically because its current state is unclear. No changes were made.",
+      "system_dashboard_error": "The System Dashboard could not be updated right now. No changes were made; please try again.",
+      "manager_unavailable": "Grid Power is not ready yet. Please try again in a moment.",
+      "invalid_mapping": "The selected Grid Power mapping is invalid."
+    }
+  },
+  "selector": {
+    "tier_option": {
+      "options": {
+        "standard": "Standard — Monitoring + APR",
+        "extended": "Extended — Battery mode, export limit, battery controls"
+      }
+    },
+    "tier_map_blocked_action": {
+      "options": {
+        "continue_standard": "Continue with Standard",
+        "cancel": "Cancel setup"
+      }
     }
   },
   "exceptions": {

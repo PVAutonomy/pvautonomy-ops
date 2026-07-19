@@ -86,6 +86,19 @@ from .const import (
     UNSAFE_CONSENT_PHRASE,
 )
 from .device_id import compute_device_id, compute_node_name
+from .const import GRID_POWER_OPTIONS_KEY
+from .grid_power import (
+    GRID_POWER_MANAGER_KEY,
+    GridPowerManager,
+    entity_to_source_ref,
+    signed_net_mapping,
+    split_mapping,
+    validate_mapping_dict,
+)
+from .grid_power_shrdzm import (
+    count_shrdzm_devices,
+    discover_shrdzm_candidates,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -2155,6 +2168,37 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def async_step_installation_anchor(
+        self, discovery_info: Any | None = None
+    ) -> FlowResult:
+        """Create the installation anchor (M3A / #169 WP1).
+
+        Ops Contract v1.1.2 §9.4.2 / OCD-6. Internal source only (dispatched
+        from installation_anchor.async_ensure_installation_anchor); not
+        customer-routable. Single-instance is enforced by the fixed unique_id
+        plus _abort_if_unique_id_configured — the same precedent as the
+        yaml_import singleton above. Creates a non-device entry with an
+        immutable entry_kind discriminator and NO device metadata; it owns no
+        entities, services, or dashboard (WP1 is lifecycle only).
+        """
+        from .const import (
+            ENTRY_KIND,
+            ENTRY_KIND_INSTALLATION_ANCHOR,
+            INSTALLATION_ANCHOR_TITLE,
+            INSTALLATION_ANCHOR_UNIQUE_ID,
+        )
+
+        await self.async_set_unique_id(INSTALLATION_ANCHOR_UNIQUE_ID)
+        self._abort_if_unique_id_configured()
+
+        _LOGGER.info("Creating PVAutonomy installation anchor (§9.4.2)")
+
+        return self.async_create_entry(
+            title=INSTALLATION_ANCHOR_TITLE,
+            data={ENTRY_KIND: ENTRY_KIND_INSTALLATION_ANCHOR},
+            options={},
+        )
+
     def _get_proxy_defaults(self) -> dict[str, str]:
         """Get proxy config from existing entries (pre-fill for 2nd+ device)."""
         entries = self.hass.config_entries.async_entries(DOMAIN)
@@ -2199,8 +2243,17 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> "PVAutonomyOpsOptionsFlow":
-        """Get the options flow handler."""
+    ) -> config_entries.OptionsFlow:
+        """Get the options flow handler.
+
+        M3A/#169 WP3: the installation anchor gets a dedicated Grid Power
+        onboarding flow (§9.4.3/§9.4.7); device entries keep the existing
+        settings/relocate/cleanup menu.
+        """
+        from .installation_anchor import is_installation_anchor
+
+        if is_installation_anchor(config_entry):
+            return GridPowerOptionsFlow()
         return PVAutonomyOpsOptionsFlow()
 
 
@@ -2342,7 +2395,97 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
         """Show options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["settings", "relocate", "cleanup_entities"],
+            menu_options=[
+                "settings",
+                "system_dashboard",
+                "relocate",
+                "cleanup_entities",
+            ],
+        )
+
+    # ------------------------------------------------------------------
+    # System Dashboard: OCD-3 explicit removal / re-enable (WP3).
+    # Integration-global suppression state (not a per-entry option).
+    # ------------------------------------------------------------------
+
+    async def async_step_system_dashboard(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Route to the enabled or disabled management form by current state."""
+        from .dashboard_builder import _read_suppression_state
+
+        try:
+            suppressed = await _read_suppression_state(self.hass)
+        except Exception:  # noqa: BLE001 — fail closed, actionable error
+            return self.async_abort(reason="system_dashboard_error")
+        if suppressed:
+            return await self.async_step_sysdash_disabled()
+        return await self.async_step_sysdash_enabled()
+
+    async def async_step_sysdash_enabled(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Enabled state: offer confirmation-gated disable-and-remove."""
+        from .dashboard_builder import (
+            SYSTEM_DASHBOARD_ALREADY_REMOVED,
+            SYSTEM_DASHBOARD_PARTIAL_REMOVAL,
+            SYSTEM_DASHBOARD_REMOVED,
+            SYSTEM_DASHBOARD_SUPPRESSED_ABSENT,
+            SYSTEM_DASHBOARD_UNMANAGED_COLLISION,
+            async_disable_and_remove_system_dashboard,
+        )
+
+        if user_input is not None:
+            if not user_input.get("confirm_disable"):
+                return self.async_abort(reason="system_dashboard_no_change")
+            outcome = await async_disable_and_remove_system_dashboard(self.hass)
+            if outcome in (
+                SYSTEM_DASHBOARD_REMOVED,
+                SYSTEM_DASHBOARD_SUPPRESSED_ABSENT,
+                SYSTEM_DASHBOARD_ALREADY_REMOVED,
+            ):
+                return self.async_abort(reason="system_dashboard_removed")
+            if outcome == SYSTEM_DASHBOARD_PARTIAL_REMOVAL:
+                return self.async_abort(reason="system_dashboard_partial")
+            if outcome == SYSTEM_DASHBOARD_UNMANAGED_COLLISION:
+                return self.async_abort(reason="system_dashboard_ambiguous")
+            return self.async_abort(reason="system_dashboard_error")
+
+        return self.async_show_form(
+            step_id="sysdash_enabled",
+            data_schema=vol.Schema(
+                {vol.Optional("confirm_disable", default=False): bool}
+            ),
+        )
+
+    async def async_step_sysdash_disabled(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Disabled state: offer confirmation-gated enable-and-regenerate."""
+        from .dashboard_builder import (
+            SYSTEM_DASHBOARD_ENABLED,
+            SYSTEM_DASHBOARD_PARTIAL_REMOVAL,
+            SYSTEM_DASHBOARD_UNMANAGED_COLLISION,
+            async_enable_system_dashboard,
+        )
+
+        if user_input is not None:
+            if not user_input.get("confirm_enable"):
+                return self.async_abort(reason="system_dashboard_no_change")
+            outcome = await async_enable_system_dashboard(self.hass)
+            if outcome == SYSTEM_DASHBOARD_ENABLED:
+                return self.async_abort(reason="system_dashboard_enabled")
+            if outcome == SYSTEM_DASHBOARD_UNMANAGED_COLLISION:
+                return self.async_abort(reason="system_dashboard_ambiguous")
+            if outcome == SYSTEM_DASHBOARD_PARTIAL_REMOVAL:
+                return self.async_abort(reason="system_dashboard_partial")
+            return self.async_abort(reason="system_dashboard_error")
+
+        return self.async_show_form(
+            step_id="sysdash_disabled",
+            data_schema=vol.Schema(
+                {vol.Optional("confirm_enable", default=False): bool}
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -2793,4 +2936,318 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
                 "errors": str(rpt.get("errors", 0)),
                 "old_prefixes": rpt.get("old_prefixes", "—"),
             },
+        )
+
+
+# ============================================================================
+# Grid Power onboarding Options Flow (M3A / #169 WP3)
+# Authority: Ops Contract v1.1.2 §9.4.3 / §9.4.6 / §9.4.7. Detect → Map →
+# Validate → Confirm → Guide, over the WP2 runtime (GridPowerManager +
+# Installation Anchor). Supports Type B (mapped existing HA entity, incl.
+# degraded entity-id-only) and Type C (none — healthy). Type A (SHRDZM/P1
+# adapter) is out of scope here (§9.4.8 = WP4).
+#
+# No runtime duplication: the flow validates via the manager's dry-run
+# (GridPowerManager.validate_candidate) and builds mappings via the canonical
+# schema (entity_to_source_ref + the mapping builders + validate_mapping_dict).
+# Persistence is the standard OptionsFlow create_entry write to the anchor
+# options; the manager reacts through its own update listener. No MQTT
+# credentials are read/requested/stored — only non-secret MQTT presence may be
+# displayed (§9.4.6).
+# ============================================================================
+
+
+class GridPowerOptionsFlow(config_entries.OptionsFlow):
+    """Installation-global Grid Power onboarding for the anchor (§9.4.3/§9.4.7).
+
+    Note: self.config_entry is a read-only property from the OptionsFlow base
+    class (the anchor entry) — do NOT set it in __init__.
+    """
+
+    def __init__(self) -> None:
+        # The in-progress candidate mapping (raw grid_power dict) or None.
+        self._candidate: dict | None = None
+        # Type-A (SHRDZM) selection context — non-secret label + neutral mode.
+        self._shrdzm_label: str = ""
+        self._shrdzm_mode: str = ""
+
+    # -- helpers ------------------------------------------------------------
+
+    def _manager(self) -> "GridPowerManager | None":
+        return (
+            self.hass.data.get(DOMAIN, {})
+            .get(self.config_entry.entry_id, {})
+            .get(GRID_POWER_MANAGER_KEY)
+        )
+
+    def _detect(self) -> tuple[int, bool]:
+        """Detect (non-secret): count candidate power sensors + MQTT presence.
+
+        MQTT presence is read only from HA's own component/entry registry — no
+        broker credentials are touched (§9.4.6).
+        """
+        candidates = sum(
+            1
+            for state in self.hass.states.async_all("sensor")
+            if state.attributes.get("device_class") == "power"
+        )
+        mqtt_present = "mqtt" in self.hass.config.components or bool(
+            self.hass.config_entries.async_entries("mqtt")
+        )
+        return candidates, mqtt_present
+
+    def _state_placeholders(self) -> dict[str, str]:
+        manager = self._manager()
+        state = manager.capability_state if manager is not None else "unknown"
+        reason = ""
+        if manager is not None:
+            reason = manager.capability_attributes.get("validation_reason") or ""
+        candidates, mqtt_present = self._detect()
+        shrdzm_total = count_shrdzm_devices(self.hass)
+        shrdzm_usable = len(discover_shrdzm_candidates(self.hass))
+        return {
+            "capability_state": state,
+            "reason": reason or "—",
+            "candidate_count": str(candidates),
+            "mqtt": "yes" if mqtt_present else "no",
+            # Type-A guidance: total detected vs. usable (complete-evidence) meters.
+            "shrdzm_detected": str(shrdzm_total),
+            "shrdzm_usable": str(shrdzm_usable),
+        }
+
+    def _persist(self, candidate: dict | None) -> FlowResult:
+        """Persist a validated candidate into the anchor options (§9.4.3).
+
+        Uses the standard OptionsFlow write; the GridPowerManager observes the
+        change via its update listener and re-evaluates. No direct manager
+        mutation here — single write path, no duplication.
+        """
+        new_options = dict(self.config_entry.options)
+        validated = validate_mapping_dict(candidate)
+        if validated is None:
+            new_options.pop(GRID_POWER_OPTIONS_KEY, None)
+        else:
+            new_options[GRID_POWER_OPTIONS_KEY] = validated
+        return self.async_create_entry(title="", data=new_options)
+
+    def _power_entity_selector(self):
+        from homeassistant.helpers import selector
+
+        return selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="power")
+        )
+
+    # -- menu ---------------------------------------------------------------
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        return await self.async_step_grid_menu()
+
+    async def async_step_grid_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Detect + present capability state and the onboarding choices."""
+        configured = bool(self.config_entry.options.get(GRID_POWER_OPTIONS_KEY))
+        menu_options: list[str] = []
+        # Type A (§9.4.7/§9.4.8): offer the detected supported adapter FIRST, and
+        # only when a complete, valid SHRDZM candidate exists (fail closed).
+        if discover_shrdzm_candidates(self.hass):
+            menu_options.append("configure_shrdzm")
+        menu_options += ["configure_signed_net", "configure_split"]
+        if configured:
+            menu_options.append("remove")
+        menu_options.append("guide")
+        return self.async_show_menu(
+            step_id="grid_menu",
+            menu_options=menu_options,
+            description_placeholders=self._state_placeholders(),
+        )
+
+    # -- Type A: guided SHRDZM/P1 adapter (§9.4.7/§9.4.8) -------------------
+
+    async def async_step_configure_shrdzm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Detect supported SHRDZM candidates and route to select/confirm.
+
+        Never silently falls back to a Type B mapping — if detection is
+        incomplete/ambiguous the customer is routed to Guide with actionable
+        context; the manual Type B/C paths stay available in the menu.
+        """
+        candidates = discover_shrdzm_candidates(self.hass)
+        if not candidates:
+            # Present-but-unusable SHRDZM devices → actionable guidance.
+            return await self.async_step_guide()
+        if len(candidates) == 1:
+            self._candidate = candidates[0].mapping
+            self._shrdzm_label = candidates[0].display_label
+            self._shrdzm_mode = candidates[0].mode
+            return await self.async_step_shrdzm_confirm()
+        return await self.async_step_shrdzm_select()
+
+    async def async_step_shrdzm_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Deterministic selection when multiple SHRDZM meters are present."""
+        candidates = discover_shrdzm_candidates(self.hass)
+        if not candidates:
+            return await self.async_step_guide()
+        # Deterministic, non-secret labels; opaque identity suffix disambiguates
+        # identically-named devices without leaking the MAC/token.
+        options = {
+            c.source_identity: f"{c.display_label} ({c.source_identity[:8]})"
+            for c in candidates
+        }
+        if user_input is not None:
+            chosen = next(
+                (c for c in candidates if c.source_identity == user_input["device"]),
+                None,
+            )
+            if chosen is not None:
+                self._candidate = chosen.mapping
+                self._shrdzm_label = chosen.display_label
+                self._shrdzm_mode = chosen.mode
+                return await self.async_step_shrdzm_confirm()
+        return self.async_show_form(
+            step_id="shrdzm_select",
+            data_schema=vol.Schema({vol.Required("device"): vol.In(options)}),
+        )
+
+    async def async_step_shrdzm_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the non-secret identity + dry-run projection, then persist."""
+        manager = self._manager()
+        if manager is None or self._candidate is None:
+            return self.async_abort(reason="manager_unavailable")
+        result = manager.validate_candidate(self._candidate)
+        if user_input is not None:
+            return self._persist(self._candidate)
+        return self.async_show_form(
+            step_id="shrdzm_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "label": self._shrdzm_label,
+                "mode": self._shrdzm_mode,
+                "projected_state": result.state,
+                "reason": result.reason or "—",
+            },
+        )
+
+    # -- Map: signed-net (Type B) ------------------------------------------
+
+    async def async_step_configure_signed_net(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get("confirm_sign", False):
+                # Generic signed-net: a heuristic never releases ready — the
+                # customer must confirm the sign convention first (§9.4.4).
+                errors["confirm_sign"] = "sign_not_confirmed"
+            else:
+                src = entity_to_source_ref(self.hass, user_input["source_entity"])
+                self._candidate = signed_net_mapping(src, sign_confirmed=True)
+                return await self.async_step_grid_validate()
+        schema = vol.Schema(
+            {
+                vol.Required("source_entity"): self._power_entity_selector(),
+                vol.Required("confirm_sign", default=False): bool,
+            }
+        )
+        return self.async_show_form(
+            step_id="configure_signed_net",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=self._state_placeholders(),
+        )
+
+    # -- Map: split import/export (Type B) ---------------------------------
+
+    async def async_step_configure_split(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            import_entity = user_input["import_entity"]
+            export_entity = user_input["export_entity"]
+            if import_entity == export_entity:
+                errors["export_entity"] = "same_entity"
+            else:
+                self._candidate = split_mapping(
+                    entity_to_source_ref(self.hass, import_entity),
+                    entity_to_source_ref(self.hass, export_entity),
+                )
+                return await self.async_step_grid_validate()
+        schema = vol.Schema(
+            {
+                vol.Required("import_entity"): self._power_entity_selector(),
+                vol.Required("export_entity"): self._power_entity_selector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="configure_split",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=self._state_placeholders(),
+        )
+
+    # -- Validate + Confirm -------------------------------------------------
+
+    async def async_step_grid_validate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Dry-run the candidate (no persistence), show feedback, then confirm."""
+        manager = self._manager()
+        if manager is None or self._candidate is None:
+            return self.async_abort(reason="manager_unavailable")
+        try:
+            result = manager.validate_candidate(self._candidate)
+        except ValueError:
+            return self.async_abort(reason="invalid_mapping")
+
+        if user_input is not None:
+            # Confirm → persist. A not_ready-but-recoverable mapping (e.g. a
+            # source that is not yet fresh) is still a legitimate configuration
+            # and is persisted; the capability recovers when the source updates.
+            return self._persist(self._candidate)
+
+        return self.async_show_form(
+            step_id="grid_validate",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "projected_state": result.state,
+                "reason": result.reason or "—",
+                "degraded": "yes" if result.degraded else "no",
+                "sources": ", ".join(result.source_entities) or "—",
+            },
+        )
+
+    # -- Remove (Type C — none, healthy) -----------------------------------
+
+    async def async_step_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            # Deleting the mapping returns Grid Power to the healthy
+            # not_configured state; it is never silently restored (§9.4.2).
+            return self._persist(None)
+        return self.async_show_form(
+            step_id="remove",
+            data_schema=vol.Schema({}),
+            description_placeholders=self._state_placeholders(),
+        )
+
+    # -- Guide (recovery guidance) -----------------------------------------
+
+    async def async_step_guide(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return await self.async_step_grid_menu()
+        return self.async_show_form(
+            step_id="guide",
+            data_schema=vol.Schema({}),
+            description_placeholders=self._state_placeholders(),
         )
