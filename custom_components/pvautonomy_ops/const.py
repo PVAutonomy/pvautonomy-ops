@@ -268,6 +268,122 @@ LOCATION_PRESETS: dict[str, str] = {
 # ============================================================================
 CONFIG_ENTRY_VERSION = 2
 
+# ============================================================================
+# Installation Anchor (M3A / #169 WP1 — Ops Contract v1.1.2 §9.4.2, OCD-6)
+# ----------------------------------------------------------------------------
+# The installation anchor is a permanent, non-device Config Entry that
+# represents the PVAutonomy *installation itself* (not any runtime device). It
+# is the canonical installation identity that later Grid Power onboarding
+# (WP2+) will own its installation-global entities against. WP1 implements the
+# anchor lifecycle ONLY — no entities, no services, no dashboard, no Grid
+# Power. These constants are internal, never customer-facing configuration.
+# ============================================================================
+# entry.data discriminator key + value (immutable identity of the anchor).
+ENTRY_KIND = "entry_kind"
+ENTRY_KIND_INSTALLATION_ANCHOR = "installation_anchor"
+# Fixed, domain-scoped unique_id — exactly one anchor per installation.
+INSTALLATION_ANCHOR_UNIQUE_ID = "pvautonomy_ops_installation"
+# Config Flow source used to create the anchor (dispatches to
+# async_step_installation_anchor). Internal; not customer-routable.
+INSTALLATION_ANCHOR_SOURCE = "installation_anchor"
+# Config-entry title (English/language-neutral; localised display is later work).
+INSTALLATION_ANCHOR_TITLE = "PVAutonomy Installation"
+# Deletion-suppression store (OCD-3-style): the ONLY residual persisted
+# separately from the entry. Holds {"suppressed": bool}. The active Grid Power
+# mapping (WP2) lives in the anchor's Config Entry options, never here.
+INSTALLATION_ANCHOR_STORE_KEY = "pvautonomy_ops_installation_anchor"
+INSTALLATION_ANCHOR_STORE_VERSION = 1
+
+# ============================================================================
+# M3A / #169 WP2 — Grid Power Capability foundation
+# Authority: Ops Contract v1.1.2 §9.4.1–§9.4.5 (and §9.1 ownership model).
+# These constants define the installation-global Grid Power capability surface
+# owned by the installation anchor. No new HA entities outside the Contract;
+# no service; no dashboard; no customer config-flow UI (that is WP3).
+# ============================================================================
+
+# --- Capability ownership scope (§9.1). Explicit and testable — NOT inferred
+# from Config Entry type. Grid Power is INSTALLATION_GLOBAL; the enum also
+# admits DEVICE so future per-device capabilities reuse the same model. ---
+CAPABILITY_SCOPE_INSTALLATION_GLOBAL = "installation_global"
+CAPABILITY_SCOPE_DEVICE = "device"
+
+# --- Grid Power entity identity (§9.4.1, OCD-2A). Domain-scoped CONSTANT
+# unique_ids: they MUST NOT embed entry_id / device / host / anchor token.
+# object-id defines the intended default Entity ID; resolution is always via
+# (domain, platform, unique_id), never a literal Entity ID. ---
+GRID_POWER_MEASUREMENT_OBJECT_ID = "pvautonomy_grid_power"
+GRID_POWER_MEASUREMENT_UNIQUE_ID = "pvautonomy_grid_power"
+GRID_POWER_MEASUREMENT_TRANSLATION_KEY = "grid_power"
+GRID_POWER_CAPABILITY_OBJECT_ID = "pvautonomy_grid_power_capability"
+GRID_POWER_CAPABILITY_UNIQUE_ID = "pvautonomy_grid_power_capability"
+GRID_POWER_CAPABILITY_TRANSLATION_KEY = "grid_power_capability"
+
+# --- Capability state machine (§9.4.5). not_configured is HEALTHY (Type C). ---
+GRID_POWER_STATE_NOT_CONFIGURED = "not_configured"
+GRID_POWER_STATE_VALIDATING = "validating"
+GRID_POWER_STATE_READY = "ready"
+GRID_POWER_STATE_NOT_READY = "not_ready"
+GRID_POWER_CAPABILITY_STATES = (
+    GRID_POWER_STATE_NOT_CONFIGURED,
+    GRID_POWER_STATE_VALIDATING,
+    GRID_POWER_STATE_READY,
+    GRID_POWER_STATE_NOT_READY,
+)
+
+# --- Source model / normalization modes (§9.4.3 / §9.4.4). Type-A guided
+# adapter (adapter_shrdzm_p1) is WP4/AC-v1.1-3 and intentionally NOT
+# implemented here (§9.4.8). WP2 implements signed-net, split, and none. ---
+GRID_POWER_MODE_NONE = "none"
+GRID_POWER_MODE_SIGNED_NET = "signed_net"
+GRID_POWER_MODE_SPLIT = "split"
+
+# capability `source_type` attribute values (§9.4). WP2 maps only these two;
+# `adapter_shrdzm_p1` is reserved for the WP4 adapter and is not emitted here.
+GRID_POWER_SOURCE_TYPE_NONE = "none"
+GRID_POWER_SOURCE_TYPE_MAPPED_ENTITY = "mapped_entity"
+
+# --- Mapping persistence (§9.4.3). The active source mapping lives in the
+# installation-anchor Config Entry OPTIONS (never device entries, dashboards,
+# YAML, MQTT credentials, or the suppression store). The Contract fixes the
+# semantic schema, not JSON key names; these are this implementation's keys. ---
+GRID_POWER_OPTIONS_KEY = "grid_power"
+GRID_POWER_OPTION_SCHEMA_VERSION = "schema_version"
+GRID_POWER_OPTION_MODE = "mode"
+GRID_POWER_OPTION_SOURCES = "sources"
+GRID_POWER_OPTION_SIGN_CONFIRMED = "sign_confirmed"
+GRID_POWER_OPTION_AUTHORITATIVE_SIGN = "authoritative_sign"
+GRID_POWER_OPTION_FRESHNESS_S = "freshness_threshold_s"
+GRID_POWER_OPTION_PAIR_SKEW_S = "pair_skew_max_s"
+# Source-role keys within a mapping's `sources` map.
+GRID_POWER_ROLE_NET = "net"        # signed-net single source
+GRID_POWER_ROLE_IMPORT = "import"  # split import channel (non-negative W)
+GRID_POWER_ROLE_EXPORT = "export"  # split export channel (non-negative W)
+# Per-source identity keys (primary identity = domain/platform/unique_id tuple;
+# entity_id is a fallback/degraded-only anchor, never a resolution input when a
+# stable unique_id is present).
+GRID_POWER_SRC_DOMAIN = "domain"
+GRID_POWER_SRC_PLATFORM = "platform"
+GRID_POWER_SRC_UNIQUE_ID = "unique_id"
+GRID_POWER_SRC_ENTITY_ID = "entity_id"
+GRID_POWER_SRC_DEGRADED = "degraded"
+
+# Current mapping-options schema version (§9.4.3 — versioned from day 1).
+GRID_POWER_SCHEMA_VERSION = 1
+
+# --- Normalization output + sign convention (§9.4.4). ---
+GRID_POWER_NORMALIZED_UNIT = "W"  # canonical output; positive=import, negative=export
+GRID_POWER_SIGN_CONVENTION = "positive_import_negative_export"
+
+# --- Engineering defaults for the freshness/pair-skew invariants (§9.4.4).
+# The Contract fixes the INVARIANTS but NOT numeric defaults; these named,
+# testable constants are this implementation's governed defaults. ---
+GRID_POWER_DEFAULT_FRESHNESS_S = 60  # each source must be individually fresh
+GRID_POWER_DEFAULT_PAIR_SKEW_S = 5   # split pair coherence window (separate)
+# Staleness re-evaluation cadence for the manager's timer (implementation
+# detail; kept below the freshness threshold so staleness is caught promptly).
+GRID_POWER_STALENESS_TICK_S = 15
+
 # Config Flow step data keys
 CONF_MANUFACTURER = "manufacturer"
 CONF_MODEL_SLUG = "model_slug"

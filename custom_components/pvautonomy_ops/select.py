@@ -31,6 +31,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up PVAutonomy Ops select entities from a ConfigEntry."""
+    # M3A/#169 WP1: the installation anchor owns no entities.
+    from .installation_anchor import is_installation_anchor
+
+    if is_installation_anchor(entry):
+        return
+
     entry_data = hass.data[DOMAIN][entry.entry_id]
     input_reader = entry_data["input_reader"]
     is_legacy = entry_data.get("is_legacy", False)  # EPIC-006-STAB Phase 2

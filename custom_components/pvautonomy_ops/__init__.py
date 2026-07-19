@@ -59,7 +59,15 @@ from .const import (
     SETUP_STATE_ADOPTED,
     VERSION,
 )
+from .const import ENTRY_KIND, ENTRY_KIND_INSTALLATION_ANCHOR
 from .discovery import ContractInputReader
+from .grid_power import GRID_POWER_MANAGER_KEY, GridPowerManager
+from .installation_anchor import (
+    async_clear_suppression,
+    async_ensure_installation_anchor,
+    async_set_suppressed,
+    is_installation_anchor,
+)
 from .operations import OperationLock, OperationRunner, OperationTracker
 from .stepper import WizardEngine
 
@@ -73,6 +81,12 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.TIME,
 ]
+
+# M3A/#169 WP2: the installation anchor forwards ONLY SENSOR — exactly the two
+# installation-global Grid Power sensors (§9.4.1). It must NOT forward the other
+# device-runtime platforms (button/select/switch/time), which stay anchor-guarded
+# to zero entities.
+ANCHOR_PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
 def get_integration_data(hass: HomeAssistant, entry_id: str | None = None) -> dict:
@@ -244,6 +258,67 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                     data=config.get(DOMAIN) or {},
                 )
             )
+
+    # M3A/#169 WP1: ensure the installation anchor exists (Ops Contract
+    # §9.4.2). async_setup runs once per HA boot whenever the integration is
+    # loaded (YAML config OR any config entry present), so this single
+    # installation-level ensure guarantees same-boot, no-restart creation for
+    # both fresh installs and upgrades. Idempotent, concurrency-safe, and
+    # suppression-aware inside the helper; failures are non-fatal (a missing
+    # anchor never blocks the base integration). Deferred to HA-started (or
+    # fired immediately if already running) to avoid racing bootstrap.
+    async def _ensure_anchor(_event=None) -> None:
+        try:
+            outcome = await async_ensure_installation_anchor(hass)
+            _LOGGER.debug("Installation anchor ensure: %s", outcome)
+        except Exception:  # noqa: BLE001 — never fatal to component setup
+            _LOGGER.warning(
+                "Installation anchor ensure failed (non-fatal)", exc_info=True
+            )
+
+    if hass.is_running:
+        hass.async_create_task(_ensure_anchor())
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _ensure_anchor)
+
+    return True
+
+
+async def _async_setup_installation_anchor(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> bool:
+    """Lightweight setup path for the installation anchor (M3A/#169 §9.4.2).
+
+    Deliberately does NOT: build device runtime helpers, read device metadata,
+    heal ha_device_id / device_slug, run guardrails, register device-operation
+    timers, run an initial build, touch firmware, log a legacy-entry warning,
+    create per-device or system dashboards, register services, or forward any
+    device-runtime platform.
+
+    M3A/#169 WP2: the anchor now owns the two installation-global Grid Power
+    sensors (§9.4.1). It creates the ``GridPowerManager`` and forwards ONLY
+    SENSOR (``ANCHOR_PLATFORMS``). The runtime slot still intentionally omits
+    the ``"config"`` key so the anchor stays invisible to service-target
+    resolution (_resolve_target_entry_data), the legacy get_integration_data()
+    fallback, and the unload remaining-entries count — it can never be mistaken
+    for a device entry. The manager is stored under a dedicated key, not
+    ``"config"``.
+    """
+    _LOGGER.info(
+        "Setting up PVAutonomy installation anchor (entry %s)",
+        entry.entry_id[:8],
+    )
+    manager = GridPowerManager(hass, entry)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {
+        ENTRY_KIND: ENTRY_KIND_INSTALLATION_ANCHOR,
+        "entry": entry,
+        GRID_POWER_MANAGER_KEY: manager,
+        # NO "config" key — see docstring. NO device runtime helpers.
+    }
+    # Wire the manager BEFORE forwarding SENSOR so the sensor platform finds it.
+    await manager.async_setup()
+    await hass.config_entries.async_forward_entry_setups(entry, ANCHOR_PLATFORMS)
     return True
 
 
@@ -253,6 +328,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     This is the modern lifecycle entry point — called both for UI-created
     entries and YAML-imported entries.
     """
+    # M3A/#169 WP1: the installation anchor uses a dedicated lightweight setup
+    # path (Ops Contract §9.4.2). It represents the installation, not a device,
+    # so it must NOT run any device bootstrap, create runtime helpers, forward
+    # platforms/entities, register services, create dashboards, or be
+    # classified as legacy. Branch before all device logic.
+    if is_installation_anchor(entry):
+        return await _async_setup_installation_anchor(hass, entry)
+
     _LOGGER.info(
         "Setting up PVAutonomy Ops entry (version %s, contract %s)",
         VERSION,
@@ -330,6 +413,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             new_options[CONF_MAP_CONFIRMED] = initial_device.get("map_confirmed", False)
         if CONF_SELECTED_TIER not in new_options:
             new_options[CONF_SELECTED_TIER] = DEFAULT_SELECTED_TIER
+        # [M2/#168 WP6A] Persist the immutable device slug (ADR-003) at the
+        # options root BEFORE _initial_device is consumed: the System
+        # Dashboard maintenance-target roster resolves the slug without a
+        # hass handle, so on a fresh host it would otherwise be empty for
+        # every wizard-created entry after this one-time bootstrap.
+        from .const import CONF_DEVICE_SLUG
+        if not new_options.get(CONF_DEVICE_SLUG):
+            from .config_flow import get_device_slug_from_entry
+
+            _slug = initial_device.get(CONF_DEVICE_SLUG) or (
+                get_device_slug_from_entry(entry)
+            )
+            if _slug:
+                new_options[CONF_DEVICE_SLUG] = _slug
         del new_options["_initial_device"]
         hass.config_entries.async_update_entry(entry, options=new_options)
 
@@ -394,6 +491,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info(
                 "Auto-migrated ha_device_id=%s for entry %s",
                 _recovered_device_id[:8],
+                entry.entry_id[:8],
+            )
+
+    # [M2/#168 WP6A] Self-heal: entries bootstrapped before the slug
+    # promotion above have no root-level device_slug and no _initial_device
+    # left, so the maintenance-target roster cannot see them. Resolve once
+    # with the hass handle (ESPHome fallback available only at setup time)
+    # and persist — same one-time auto-migration pattern as ha_device_id.
+    from .const import CONF_DEVICE_SLUG as _CONF_DEVICE_SLUG
+    if not entry.options.get(_CONF_DEVICE_SLUG):
+        from .config_flow import get_device_slug_from_entry
+
+        try:
+            _healed_slug = get_device_slug_from_entry(entry, hass)
+        except Exception:  # noqa: BLE001 — heal is best-effort, never fatal
+            _healed_slug = None
+        if _healed_slug:
+            new_options = dict(entry.options)
+            new_options[_CONF_DEVICE_SLUG] = _healed_slug
+            hass.config_entries.async_update_entry(entry, options=new_options)
+            _LOGGER.info(
+                "Auto-migrated device_slug=%s for entry %s",
+                _healed_slug,
                 entry.entry_id[:8],
             )
 
@@ -514,6 +634,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # entities previously disabled by the integration are re-enabled
         # automatically when the registry flips them back on.
         await _async_apply_guardrails(hass, metadata_store, entry)
+
+        # [M2/#168 WP2A] Ensure the integration-managed System Dashboard
+        # (pva-system, Ops Contract §9.7 / PD-01) exists and is current.
+        # Installation-wide (not tied to this entry), idempotent and
+        # serialised internally; fail-safe — a dashboard failure never
+        # breaks an otherwise healthy device setup. Never deletes or
+        # suppresses the dashboard (OCD-3 flow is later work).
+        try:
+            from .dashboard_builder import async_ensure_system_dashboard
+
+            outcome = await async_ensure_system_dashboard(hass)
+            _LOGGER.debug("System dashboard ensure outcome: %s", outcome)
+        except Exception:  # noqa: BLE001 — defense in depth; never fatal
+            _LOGGER.warning(
+                "System dashboard ensure failed (non-fatal; device setup "
+                "continues)",
+                exc_info=True,
+            )
 
     # If HA is already running (e.g. after options-update reload), start
     # immediately. Otherwise wait for HOMEASSISTANT_STARTED (first boot).
@@ -747,33 +885,106 @@ async def _async_initial_build(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a PVAutonomy Ops config entry."""
-    _LOGGER.info("Unloading PVAutonomy Ops entry %s", entry.entry_id[:8])
+    # M3A/#169 WP2: the installation anchor forwards ONLY SENSOR and owns the
+    # Grid Power manager. Tear the manager down deterministically, then unload
+    # its sensor platform. It never sets suppression (that is deliberate
+    # deletion — async_remove_entry) and never touches device entries.
+    if is_installation_anchor(entry):
+        _LOGGER.info(
+            "Unloading PVAutonomy installation anchor %s", entry.entry_id[:8]
+        )
+        manager: GridPowerManager | None = (
+            hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get(GRID_POWER_MANAGER_KEY)
+        )
+        if manager is not None:
+            manager.shutdown()
+        unload_ok = await hass.config_entries.async_unload_platforms(
+            entry, ANCHOR_PLATFORMS
+        )
+    else:
+        _LOGGER.info("Unloading PVAutonomy Ops entry %s", entry.entry_id[:8])
 
-    # Cancel periodic timer (PN-2: per entry_id)
-    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-    cancel_timer = entry_data.get("cancel_timer")
-    if cancel_timer:
-        cancel_timer()
+        # Cancel periodic timer (PN-2: per entry_id)
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        cancel_timer = entry_data.get("cancel_timer")
+        if cancel_timer:
+            cancel_timer()
 
-    # Unload platforms
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        # Unload platforms
+        unload_ok = await hass.config_entries.async_unload_platforms(
+            entry, PLATFORMS
+        )
 
     if unload_ok:
         domain_data = hass.data.get(DOMAIN, {})
         domain_data.pop(entry.entry_id, None)
 
-        # EPIC-015 P1-06: Check if any config entries remain
-        remaining_entries = {
+        # EPIC-015 P1-06: services are device-oriented — remove them once no
+        # device ("config") entry remains loaded. The anchor never carries a
+        # "config" key, so an anchor-only installation correctly has no
+        # services registered.
+        remaining_device_entries = {
             k: v for k, v in domain_data.items()
             if isinstance(v, dict) and "config" in v
         }
-        if not remaining_entries:
-            # Last entry unloaded — remove domain services + clean up
-            if domain_data.get("_services_registered"):
-                _async_remove_services(hass)
+        if not remaining_device_entries and domain_data.get(
+            "_services_registered"
+        ):
+            _async_remove_services(hass)
+            domain_data.pop("_services_registered", None)
+
+        # M3A/#169 WP1: only drop the whole domain bucket when NO entry slots
+        # remain (device OR anchor). Previously this keyed off device entries
+        # only, which would wipe a still-loaded anchor's slot when the last
+        # device unloaded. With no anchor present this is identical to the old
+        # behavior (remaining device entries == remaining entry slots).
+        remaining_entry_slots = {
+            k: v for k, v in domain_data.items()
+            if isinstance(v, dict)
+            and ("config" in v or v.get(ENTRY_KIND) == ENTRY_KIND_INSTALLATION_ANCHOR)
+        }
+        if not remaining_entry_slots:
             hass.data.pop(DOMAIN, None)
 
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle deliberate removal of a PVAutonomy Config Entry (M3A/#169 §9.4.2).
+
+    - Deleting the **anchor** is a deliberate act: suppress automatic
+      recreation so no zombie anchor reappears on a later device setup.
+    - **Full-domain removal** (no PVAutonomy entries remain after this one):
+      clear residual suppression so no orphaned installation state is left
+      behind and a future fresh install is not blocked.
+    - Deleting a **device** entry never suppresses or removes the anchor.
+    """
+    remaining = [
+        e
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.entry_id != entry.entry_id
+    ]
+
+    if is_installation_anchor(entry):
+        if remaining:
+            # Deliberate anchor deletion while devices remain → no zombie.
+            await async_set_suppressed(hass, True)
+            _LOGGER.info(
+                "Installation anchor removed; automatic recreation suppressed "
+                "(%d PVAutonomy entr%s remain)",
+                len(remaining),
+                "y" if len(remaining) == 1 else "ies",
+            )
+            return
+        # Anchor was the last entry → treat as full-domain removal below.
+
+    if not remaining:
+        # No PVAutonomy entries left at all — leave no residual state.
+        await async_clear_suppression(hass)
+        _LOGGER.info(
+            "Last PVAutonomy entry removed; cleared residual installation-"
+            "anchor state (full-domain removal)"
+        )
 
 
 async def _async_options_updated(
@@ -807,10 +1018,16 @@ def _resolve_target_entry_data(
             )
         return requested_entry_id, entry_data
 
-    # No entry_id supplied — check loaded entries
+    # No entry_id supplied — check loaded entries.
+    # M3A/#169 WP1: the installation anchor is never a service target. It
+    # already carries no "config" key (so it is excluded here structurally),
+    # but the explicit entry_kind check makes the guarantee obvious and
+    # robust to future changes in the anchor's runtime slot shape.
     loaded_entries = {
         k: v for k, v in domain_data.items()
-        if isinstance(v, dict) and "config" in v
+        if isinstance(v, dict)
+        and "config" in v
+        and v.get(ENTRY_KIND) != ENTRY_KIND_INSTALLATION_ANCHOR
     }
 
     if len(loaded_entries) == 0:

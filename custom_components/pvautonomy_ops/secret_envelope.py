@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -47,6 +48,8 @@ from ._vendor.pyhpke import (
     KEMId,
 )
 from ._vendor.pyhpke.exceptions import OpenError, PyHPKEError, SealError
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +77,12 @@ REQUEST_NONCE_LEN: Final[int] = 16
 
 #: Bytes of ``sha256(enc || ciphertext)`` to keep for ``envelope_fingerprint``.
 ENVELOPE_FINGERPRINT_LEN: Final[int] = 12
+
+#: Hex chars of ``sha256(public_key_raw)`` kept in the ``HPKE-AUDIT:``
+#: fence-advance line (#163). Ceremony runbooks compare this prefix against
+#: ``sha256sum`` of the published PUBLIC key — keep it stable across releases
+#: or logged prefixes stop being comparable between rotations.
+PUBKEY_FINGERPRINT_HEX_LEN: Final[int] = 16
 
 #: Pinned production root public keys (Ed25519, raw 32-byte form).
 #:
@@ -167,6 +176,9 @@ class VerifiedKeyset:
     expires_at: str
     expires_at_dt: datetime
     environment: str | None = None
+    #: id of the pinned root whose signature verified (audit only — the
+    #: PUBLIC root key id, never key material). Issue #163.
+    accepted_root_key_id: str | None = None
 
 
 def _parse_iso8601(value: str, *, field_name: str) -> datetime:
@@ -433,6 +445,7 @@ def verify_signed_keyset(
         expires_at=expires_at_str,
         expires_at_dt=expires_at,
         environment=environment if isinstance(environment, str) else None,
+        accepted_root_key_id=accepted_root,
     )
 
 
@@ -673,6 +686,26 @@ KEYSET_ENDPOINT_PATH: Final[str] = "/build-backend/keys"
 KEYSET_FETCH_TIMEOUT_S: Final[float] = 15.0
 
 
+def _default_cache_data() -> dict[str, Any]:
+    """Fresh default persisted shape for :class:`BuildBackendKeysetCache`.
+
+    Single source of truth for the Store schema: ``async_load`` only keeps
+    keys present here, and the test fakes reuse this factory so their
+    ``_data`` shape cannot drift from production (#163 review).
+    """
+    return {
+        "version": KEYSET_STORAGE_VERSION,
+        "signed_keyset": None,
+        "stored_max_serial": -1,
+        "last_envelope_used_at": None,
+        "last_envelope_key_id": None,
+        "last_keyset_serial": None,
+        "last_accepted_key_id": None,
+        "last_accepted_root_key_id": None,
+        "last_fence_advance": None,
+    }
+
+
 class BuildBackendKeysetCache:
     """Persistent cache for the latest verified build-backend keyset.
 
@@ -685,6 +718,10 @@ class BuildBackendKeysetCache:
       (anti-rollback fence).
     * ``last_envelope_used_at`` / ``last_envelope_key_id``: per-build audit.
     * ``last_keyset_serial``: serial of the last keyset used for a build.
+    * ``last_accepted_key_id`` / ``last_accepted_root_key_id``: active key id
+      and verifying root id of the last accepted keyset (ids only, #163).
+    * ``last_fence_advance``: old/new serial + timestamp + key ids of the
+      last anti-rollback fence advance (the rotation point-of-no-return).
 
     Never persists private keys, plaintext compile secrets, ``enc``,
     ``ciphertext``, or full envelope JSON.
@@ -700,14 +737,7 @@ class BuildBackendKeysetCache:
 
         self._hass = hass
         self._store: Any = Store(hass, KEYSET_STORAGE_VERSION, KEYSET_STORAGE_KEY)
-        self._data: dict[str, Any] = {
-            "version": KEYSET_STORAGE_VERSION,
-            "signed_keyset": None,
-            "stored_max_serial": -1,
-            "last_envelope_used_at": None,
-            "last_envelope_key_id": None,
-            "last_keyset_serial": None,
-        }
+        self._data: dict[str, Any] = _default_cache_data()
 
     async def async_load(self) -> None:
         """Load cache from persistent storage."""
@@ -744,13 +774,116 @@ class BuildBackendKeysetCache:
         v = self._data.get("last_keyset_serial")
         return v if isinstance(v, int) and not isinstance(v, bool) else None
 
-    async def async_record_accepted_keyset(self, verified: VerifiedKeyset) -> None:
-        """Persist a freshly-verified keyset and bump the serial fence."""
+    @property
+    def last_accepted_key_id(self) -> str | None:
+        v = self._data.get("last_accepted_key_id")
+        return v if isinstance(v, str) else None
+
+    @property
+    def last_accepted_root_key_id(self) -> str | None:
+        v = self._data.get("last_accepted_root_key_id")
+        return v if isinstance(v, str) else None
+
+    @property
+    def last_fence_advance(self) -> dict[str, Any] | None:
+        """Sanitized copy of the persisted fence-advance record (#163).
+
+        Rebuilt against a fixed key/type allowlist rather than copied
+        verbatim, so corrupted or hand-edited storage can never inject
+        arbitrary content into diagnostics output.
+        """
+        rec = self._data.get("last_fence_advance")
+        if not isinstance(rec, dict):
+            return None
+
+        def _int(v: Any) -> int | None:
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+        def _str(v: Any) -> str | None:
+            return v if isinstance(v, str) else None
+
+        return {
+            "old_serial": _int(rec.get("old_serial")),
+            "new_serial": _int(rec.get("new_serial")),
+            "keyset_serial": _int(rec.get("keyset_serial")),
+            "active_key_id": _str(rec.get("active_key_id")),
+            "root_key_id": _str(rec.get("root_key_id")),
+            "at": _str(rec.get("at")),
+        }
+
+    async def async_record_accepted_keyset(
+        self, verified: VerifiedKeyset, *, when: datetime | None = None
+    ) -> None:
+        """Persist a freshly-verified keyset and bump the serial fence.
+
+        When the anti-rollback fence actually advances (a rotation's
+        point-of-no-return, e.g. ``stored_max_serial`` 1→2 during the #151
+        Serial-2 acceptance), emit a stable ``HPKE-AUDIT:`` INFO line and
+        persist a ``last_fence_advance`` record so future ceremonies (R3+)
+        can validate the transition without fragile log-scraping. The line
+        is emitted only AFTER the record persisted — a failed Store save
+        must not leave ceremony evidence in the log that disk state
+        contradicts. Steady-state re-acceptance of an equal serial (#159)
+        does not move the fence and stays silent. Log-safe fields only:
+        serials, key ids, and a sha256 prefix of the PUBLIC active key —
+        never key material.
+        """
+        snapshot = {
+            k: self._data[k]
+            for k in (
+                "signed_keyset",
+                "stored_max_serial",
+                "last_accepted_key_id",
+                "last_accepted_root_key_id",
+                "last_fence_advance",
+            )
+        }
+        old_serial = self.stored_max_serial
+        new_serial = max(old_serial, verified.keyset_serial)
         self._data["signed_keyset"] = dict(verified.raw)
-        self._data["stored_max_serial"] = max(
-            self.stored_max_serial, verified.keyset_serial
-        )
-        await self._async_save()
+        self._data["stored_max_serial"] = new_serial
+        self._data["last_accepted_key_id"] = verified.active_key.key_id
+        self._data["last_accepted_root_key_id"] = verified.accepted_root_key_id
+        advanced = new_serial > old_serial
+        if advanced:
+            if when is None:
+                when = datetime.now(timezone.utc)
+            elif when.tzinfo is None:
+                # Audit timestamps must stay unambiguous — treat naive as
+                # UTC, matching _parse_iso8601's reading of keyset stamps.
+                when = when.replace(tzinfo=timezone.utc)
+            else:
+                when = when.astimezone(timezone.utc)
+            self._data["last_fence_advance"] = {
+                "old_serial": old_serial,
+                "new_serial": new_serial,
+                "keyset_serial": verified.keyset_serial,
+                "active_key_id": verified.active_key.key_id,
+                "root_key_id": verified.accepted_root_key_id,
+                "at": when.isoformat(),
+            }
+        try:
+            await self._async_save()
+        except Exception:
+            # Keep memory == disk: without the rollback, a retried
+            # acceptance on this (singleton) cache would see the already-
+            # advanced in-memory fence, persist silently, and the rotation
+            # would never get its HPKE-AUDIT line.
+            self._data.update(snapshot)
+            raise
+        if advanced:
+            _LOGGER.info(
+                "HPKE-AUDIT: fence_advance stored_max_serial=%s->%s "
+                "keyset_serial=%s active_key_id=%s root_key_id=%s "
+                "active_pub_sha256=%s",
+                old_serial,
+                new_serial,
+                verified.keyset_serial,
+                verified.active_key.key_id,
+                verified.accepted_root_key_id,
+                hashlib.sha256(verified.active_key.public_key_raw)
+                .hexdigest()[:PUBKEY_FINGERPRINT_HEX_LEN],
+            )
 
     async def async_record_envelope_used(
         self, *, key_id: str, keyset_serial: int, when: datetime | None = None
@@ -770,6 +903,9 @@ class BuildBackendKeysetCache:
             "last_envelope_used_at": self.last_envelope_used_at,
             "last_envelope_key_id": self.last_envelope_key_id,
             "last_keyset_serial": self.last_keyset_serial,
+            "last_accepted_key_id": self.last_accepted_key_id,
+            "last_accepted_root_key_id": self.last_accepted_root_key_id,
+            "last_fence_advance": self.last_fence_advance,
             "has_cached_signed_keyset": (
                 self._data.get("signed_keyset") is not None
             ),
@@ -937,6 +1073,7 @@ __all__ = [
     "KEYSET_STORAGE_VERSION",
     "KeysetEndpointUnsupported",
     "KeysetVerificationError",
+    "PUBKEY_FINGERPRINT_HEX_LEN",
     "REQUEST_NONCE_LEN",
     "ROOT_PUBKEYS_PINNED",
     "SealedEnvelope",

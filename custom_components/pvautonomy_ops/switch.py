@@ -56,6 +56,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up PVAutonomy switch entities from a ConfigEntry."""
+    # M3A/#169 WP1: the installation anchor owns no entities (a new anchor
+    # unique_id would not match the yaml_import guard below, so guard it
+    # explicitly rather than rely on the incidental "no selected device" exit).
+    from .installation_anchor import is_installation_anchor
+
+    if is_installation_anchor(entry):
+        return
+
     if _is_legacy_yaml_import_entry(entry):
         _LOGGER.info(
             "Skipping switch entity setup for legacy import entry %s",

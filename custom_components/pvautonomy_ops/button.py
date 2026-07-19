@@ -93,6 +93,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up PVAutonomy Ops buttons from a ConfigEntry."""
+    # M3A/#169 WP1: the installation anchor owns no entities.
+    from .installation_anchor import is_installation_anchor
+
+    if is_installation_anchor(entry):
+        return
+
     _LOGGER.info("Setting up PVAutonomy Ops buttons (ConfigEntry)")
 
     # PN-2: per entry_id keying

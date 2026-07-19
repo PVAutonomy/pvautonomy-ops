@@ -187,6 +187,20 @@
     }
   },
   "entity": {
+    "sensor": {
+      "grid_power": {
+        "name": "Netzleistung"
+      },
+      "grid_power_capability": {
+        "name": "Netzleistung-Verfügbarkeit",
+        "state": {
+          "not_configured": "Nicht konfiguriert",
+          "validating": "Wird geprüft",
+          "ready": "Bereit",
+          "not_ready": "Nicht bereit"
+        }
+      }
+    },
     "select": {
       "target_device": {
         "name": "Zielgerät",
@@ -287,15 +301,77 @@
       "cleanup_complete": {
         "title": "Bereinigung abgeschlossen",
         "description": "Alte Präfixe: {old_prefixes}\n\n- Deaktiviert: **{disabled}**\n- Gelöscht: **{deleted}**\n- Übersprungen (bereits deaktiviert): **{skipped}**\n- Fehler: **{errors}**\n\nPrüfen Sie Dashboards und Automationen auf Verweise auf alte Entity-IDs."
+      },
+      "grid_menu": {
+        "title": "Netzleistung",
+        "description": "Aktueller Status: **{capability_state}** ({reason}).\n{candidate_count} Leistungssensor(en) erkannt; MQTT-Integration vorhanden: {mqtt}.\nWählen Sie, wie die Netzleistung bereitgestellt wird (optional).\nUnterstützte Smart Meter (SHRDZM) erkannt: {shrdzm_detected} ({shrdzm_usable} verwendbar).",
+        "menu_options": {
+          "configure_signed_net": "Ein vorzeichenbehafteter Netto-Leistungssensor",
+          "configure_split": "Getrennte Bezug- + Einspeisesensoren",
+          "remove": "Netzleistungsquelle entfernen",
+          "guide": "Hilfe & Wiederherstellung",
+          "configure_shrdzm": "Erkannten Smart Meter verwenden (SHRDZM)"
+        }
+      },
+      "configure_signed_net": {
+        "title": "Vorzeichenbehaftete Netzleistung",
+        "description": "Wählen Sie einen Leistungssensor, bei dem positiv = Netzbezug und negativ = Einspeisung ist. {candidate_count} Kandidat(en) erkannt. Sie müssen die Vorzeichenkonvention bestätigen, um zu aktivieren.",
+        "data": {
+          "source_entity": "Netto-Leistungssensor",
+          "confirm_sign": "Positiv = Netzbezug, negativ = Einspeisung"
+        },
+        "data_description": {
+          "source_entity": "Ein Sensor mit vorzeichenbehafteter Netzleistung (W).",
+          "confirm_sign": "Erforderlich: bestätigen Sie diese Vorzeichenkonvention."
+        }
+      },
+      "configure_split": {
+        "title": "Getrennt Bezug / Einspeisung",
+        "description": "Wählen Sie zwei nicht-negative Leistungssensoren: Netzbezug und Einspeisung. Netzleistung = Bezug − Einspeisung.",
+        "data": {
+          "import_entity": "Netzbezug-Sensor",
+          "export_entity": "Einspeise-Sensor"
+        },
+        "data_description": {
+          "import_entity": "Nicht-negative Netzbezugsleistung (W).",
+          "export_entity": "Nicht-negative Einspeiseleistung (W)."
+        }
+      },
+      "grid_validate": {
+        "title": "Netzleistungsquelle bestätigen",
+        "description": "Voraussichtlicher Status: **{projected_state}** ({reason}).\nQuellen: {sources}\nEingeschränkte Zuordnung (nur Entity-ID): {degraded}.\nZum Speichern bestätigen."
+      },
+      "remove": {
+        "title": "Netzleistungsquelle entfernen",
+        "description": "Entfernt die aktuelle Zuordnung und setzt die Netzleistung auf den gesunden Zustand *nicht konfiguriert* zurück. Sie wird nicht automatisch wiederhergestellt. Aktueller Status: {capability_state}."
+      },
+      "guide": {
+        "title": "Netzleistung Hilfe & Wiederherstellung",
+        "description": "Aktueller Status: **{capability_state}** ({reason}).\n\n- **not_configured**: gesund — Netzleistung ist optional.\n- **not_ready** (stale): die Quelle aktualisiert nicht mehr — prüfen Sie das Quellgerät.\n- **not_ready** (sign): signed-net neu konfigurieren und Vorzeichen bestätigen.\n- **not_ready** (Quelle fehlt): die zugeordnete Entität wurde umbenannt oder entfernt — neu zuordnen.\n- **not_ready** (pair_skew): Bezug und Einspeisung aktualisieren zu weit auseinander — beide Zähler prüfen.\n\nZum Zurückkehren zum Menü bestätigen.\n\nSHRDZM: {shrdzm_detected} erkannt, {shrdzm_usable} verwendbar. Ist ein Meter erkannt aber nicht verwendbar, fehlen Kanäle (Bezug 1.7.0 + Einspeisung 2.7.0, oder Saldo 16.7.0) oder die Leistungs-Metadaten (device_class power, Einheit W)."
+      },
+      "shrdzm_select": {
+        "title": "SHRDZM Smart Meter wählen",
+        "description": "Mehrere unterstützte SHRDZM Smart Meter erkannt. Wählen Sie den zu verwendenden.",
+        "data": {
+          "device": "Smart Meter"
+        }
+      },
+      "shrdzm_confirm": {
+        "title": "Erkannten Smart Meter bestätigen",
+        "description": "Ein kompatibler Smart Meter wurde gefunden: **{label}** (Modus: {mode}).\nVoraussichtlicher Status: **{projected_state}** ({reason}).\nZum Übernehmen der vorgeschlagenen Zuordnung bestätigen."
       }
     },
     "error": {
       "site_too_short": "Standortname muss mindestens 2 Zeichen lang sein.",
       "number_out_of_range": "Gerätenummer muss zwischen 1 und 10 liegen.",
-      "cleanup_phrase_mismatch": "Bestätigungsphrase muss exakt lauten: DELETE"
+      "cleanup_phrase_mismatch": "Bestätigungsphrase muss exakt lauten: DELETE",
+      "sign_not_confirmed": "Bitte bestätigen Sie die Vorzeichenkonvention, um die Netzleistung zu aktivieren.",
+      "same_entity": "Bezug und Einspeisung müssen unterschiedliche Entitäten sein."
     },
     "abort": {
-      "relocate_blocked": "Umsetzen ist vorübergehend deaktiviert. Die aktuelle Implementierung kann die ESPHome-Verschlüsselungskontinuität nicht garantieren — das Gerät würde ohne Verschlüsselungsschlüssel als neu erkannt, was ein Sicherheitsrisiko darstellt. Dies wird in einem künftigen Update behoben."
+      "relocate_blocked": "Umsetzen ist vorübergehend deaktiviert. Die aktuelle Implementierung kann die ESPHome-Verschlüsselungskontinuität nicht garantieren — das Gerät würde ohne Verschlüsselungsschlüssel als neu erkannt, was ein Sicherheitsrisiko darstellt. Dies wird in einem künftigen Update behoben.",
+      "manager_unavailable": "Netzleistung ist noch nicht bereit. Bitte in einem Moment erneut versuchen.",
+      "invalid_mapping": "Die gewählte Netzleistungs-Zuordnung ist ungültig."
     }
   },
   "selector": {
