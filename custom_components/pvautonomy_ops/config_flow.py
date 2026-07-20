@@ -1513,6 +1513,20 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors={"base": "missing_required_entities"},
                 )
 
+            # UI-001 / #170 F1: adopted (running) devices receive their
+            # customer dashboard at commissioning time — same best-effort
+            # background task as the build path below. The build path gates
+            # on _setup_state == "complete", which an adoption never reaches
+            # ("adopted"), so without this the dashboard only exists after a
+            # manual Maintenance "Refresh device dashboard" and the Help
+            # navigation targets a not-yet-existing dashboard.
+            if self._registry_file:
+                self.hass.async_create_task(
+                    self._create_customer_dashboard(
+                        device_slug.replace("-", "_")
+                    )
+                )
+
             return self.async_create_entry(
                 title=self._summary_title,
                 data={},
