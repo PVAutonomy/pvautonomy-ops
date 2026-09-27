@@ -30,6 +30,7 @@ import asyncio
 
 from homeassistant.core import HomeAssistant
 
+from . import const as _const
 from .const import DOMAIN, ENTITY_STATUS_SENSOR
 from .defs_paths import (
     BUNDLED_REGISTRY_ROOT,
@@ -56,8 +57,11 @@ MANAGED_SCHEMA_KEY = "pvautonomy_managed"
 # History: 1 = WP2A notice-only shell; 2 = WP2B1 Maintenance surface;
 # 3 = WP2B2 Help / Setup Guidance surface; 4 = WP4 legacy-aware Help
 # (one-time regeneration so every managed dashboard carries the
-# legacy-state fingerprint and, when applicable, the migration notice).
-MANAGED_SCHEMA_VERSION = 4
+# legacy-state fingerprint and, when applicable, the migration notice);
+# 5 = A-4a1 Community Alpha: Maintenance without firmware actions, Alpha
+# intro and Help step 4 (one-time regeneration, so existing dashboards
+# drop the firmware buttons).
+MANAGED_SCHEMA_VERSION = 5
 
 # Marker key holding the deterministic maintenance-target-roster
 # fingerprint (WP2B1). A schema bump regenerates structure; the
@@ -67,7 +71,7 @@ TARGET_FINGERPRINT_KEY = "target_fingerprint"
 # Marker key holding the deterministic legacy-detection fingerprint (WP4).
 # Legacy artifacts appearing or disappearing changes the rendered Help
 # guidance, so the detection result participates in currentness exactly
-# like the target roster: schema 4 is "current" only when BOTH stored
+# like the target roster: the current schema is "current" only when BOTH stored
 # fingerprints match the freshly computed ones.
 LEGACY_FINGERPRINT_KEY = "legacy_fingerprint"
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -819,27 +823,32 @@ def _pv_sort_key(entity: tuple[str, str]) -> tuple[int, int, str]:
 # - work_mode (HR1080) is tier=unsafe: address conflict (HR1080 = Grid First Timeslot 1
 #   Start Time per Growatt SPH v1.24)
 #
-# RUNTIME PREREQUISITE: Conditional mode-settings cards require the HA select entity
-# select.{device}_priority_control_device. This entity only exists when the ESPHome
-# generator emits selects. The generator currently skips selects (see
-# _GENERATOR_EMITTED_BUCKETS). In the current stabilized contract, Battery First
-# Settings remain visible as normal Extended-tier dashboard rows. Contextual
-# cards can be activated later when generator select support ships.
+# RUNTIME PREREQUISITE: mode-contextual cards would need the HA select entity
+# select.{device}_priority_control_device. The generator emits it on an
+# Extended-tier build (EPIC-012 / TASK-014Q); a Standard-tier build has none.
+# The contextual cards themselves were retired by TASK-014M in favour of the
+# per-mode Settings cards, so Battery First Settings stay visible as normal
+# Extended-tier dashboard rows.
 _MODE_SOC_SETTINGS_BY_LABEL: dict[str, list[str]] = {
     "Battery First": ["battery_first_charge_stop_soc", "battery_first_charge_power_rate"],
     # Grid First: removed from user-facing path (tier=unsafe). No contextual card.
     # Load First: no confirmed SoC controls.
 }
 
-# Registry buckets that the ESPHome generator currently emits as HA entities.
-# "selects" is NOT included because the generator skips selects (generate_from_registry.py
-# line ~335: "skip safely"). Add "selects" here only after BOTH conditions hold:
-# (1) the generator truly emits select entities for the product path, and
-# (2) the intended select registry entries are no longer hard-blocked or
-# customer-gated (for example via generator_skip / enabled_by_default:false).
-# This gates the conditional card mechanism: if "selects" is absent,
-# has_priority_control evaluates to False and no conditional cards are generated.
-_GENERATOR_EMITTED_BUCKETS: frozenset[str] = frozenset({"sensors", "numbers", "switches"})
+# Registry buckets that the ESPHome generator emits as HA entities. Selects are
+# among them since EPIC-012 / TASK-014Q: yaml_generator._add_registers emits
+# every select that passes the tier, version and generator_skip gates. On an
+# Extended-tier SPH build that is exactly priority_control (HR1044); work_mode
+# and bdc_derating_mode are tier=unsafe with generator_skip. Both conditions
+# that used to keep "selects" out of this set hold: (1) the generator emits
+# select entities on the product path, and (2) priority_control is neither
+# hard-blocked nor customer-gated (no generator_skip, no
+# enabled_by_default:false). The bucket loop in build_cards() still leaves
+# priority_control to the SPH hybrid layer, which renders it exactly once, in
+# the Operating Mode card (#295).
+_GENERATOR_EMITTED_BUCKETS: frozenset[str] = frozenset(
+    {"sensors", "numbers", "switches", "selects"}
+)
 
 # The set of all mode-contextual IDs (for removing from Battery card)
 _ALL_MODE_SOC_IDS: set[str] = set()
@@ -1016,14 +1025,20 @@ def build_cards(
     }
 
     for bucket, domain in domain_map.items():
-        # Suppress selects entirely while the generator does not emit them.
-        # The generator skips selects (_GENERATOR_EMITTED_BUCKETS excludes
-        # "selects"), so select.* entities don't exist at runtime. The
-        # SPH hybrid layer below injects priority_control explicitly into
-        # the Operating Mode card without flipping this bucket gate.
-        if bucket == "selects" and "selects" not in _GENERATOR_EMITTED_BUCKETS:
+        # Only buckets the generator turns into HA entities get rows.
+        if bucket not in _GENERATOR_EMITTED_BUCKETS:
             continue
         for entry in registers.get(bucket, []):
+            # [#295] priority_control belongs to the SPH hybrid layer below,
+            # which renders it once, in the Operating Mode card. Through this
+            # loop it would land a second time, in Control: its category
+            # "mode" merges into the "Control" title.
+            if (
+                has_battery
+                and bucket == "selects"
+                and entry.get("id") == "priority_control"
+            ):
+                continue
             # [EPIC-010 2026-03-29] Dashboard shows Standard + Erweitert only.
             if entry.get("tier") == "unsafe":
                 continue
@@ -1093,11 +1108,10 @@ def build_cards(
                     break
         merged["Battery"] = battery_keep
 
-    # Inject `priority_control` explicitly into Operating Mode for SPH
-    # without flipping the global selects-bucket gate. The HA select
-    # entity is created by the EPIC-010 helper / template layer; the
-    # dashboard renders the row regardless because the entity exists at
-    # runtime on the validated EDATEC target.
+    # Render `priority_control` for SPH in the Operating Mode card, the only
+    # place it appears (the bucket loop above leaves it out). The generator
+    # emits the select on an Extended-tier build; whether it is actually
+    # there is decided by the live gate below.
     has_priority_control = (
         has_battery
         and any(
@@ -1112,15 +1126,13 @@ def build_cards(
         else None
     )
 
-    # [fix/sph-dashboard-tier-live-gating] The ESPHome generator does not emit
-    # selects (`_GENERATOR_EMITTED_BUCKETS` excludes "selects"), so the
-    # priority_control select entity does not exist at runtime — neither on a
-    # Standard- nor on the current Extended-tier flash. Gate the Operating Mode
-    # row AND the per-mode Activate buttons on the select actually being
-    # live/registered so they self-heal once select support ships, without
-    # leaking a broken row meanwhile. When no runtime snapshot is supplied
-    # (fresh install / unit tests) the select is treated as available and the
-    # full surface renders unchanged.
+    # [fix/sph-dashboard-tier-live-gating] The priority_control select exists
+    # at runtime only on an Extended-tier flash; a Standard-tier flash does
+    # not emit it. Gate the Operating Mode row AND the per-mode Activate
+    # buttons on the select actually being live/registered, so a
+    # Standard-tier device never shows a broken row. When no runtime snapshot
+    # is supplied (fresh install / unit tests) the select is treated as
+    # available and the full surface renders unchanged.
     if priority_control_eid is not None and not _dashboard_entity_available(
         priority_control_eid,
         live_entity_ids=live_entity_ids,
@@ -2297,6 +2309,9 @@ def _build_maintenance_target_section(target: dict[str, Any]) -> dict[str, Any]:
     required ``confirmed: true`` plus a UI confirmation (CJ-02·7); every
     action bakes this device's ``entry_id`` + ``device_name`` (CJ-07 —
     no shared mutable target selector).
+
+    PD-16 / PD-18 (A-4a1): Prepare and Install run the Managed Build; with
+    the managed paths disabled only Refresh remains.
     """
     entry_id = target["entry_id"]
     device_name = target["device_name"]
@@ -2316,104 +2331,141 @@ def _build_maintenance_target_section(target: dict[str, Any]) -> dict[str, Any]:
                 ],
             }
         )
-    cards.append(
-        {
-            "type": "horizontal-stack",
-            "cards": [
-                _build_maintenance_action_button(
-                    name="Prepare firmware",
-                    icon="mdi:progress-wrench",
-                    service=f"{DOMAIN}.build_firmware",
-                    data=dict(action_target),
-                    confirmation_text=(
-                        f"Prepare new firmware for {label}? This only "
-                        "prepares the firmware — nothing is installed on "
-                        "the device yet. Preparation can take several "
-                        "minutes; watch the status above."
-                    ),
+    actions: list[dict[str, Any]] = []
+    if _const.managed_paths_enabled():
+        actions.append(
+            _build_maintenance_action_button(
+                name="Prepare firmware",
+                icon="mdi:progress-wrench",
+                service=f"{DOMAIN}.build_firmware",
+                data=dict(action_target),
+                confirmation_text=(
+                    f"Prepare new firmware for {label}? Preparing "
+                    "firmware is not available in this version: this "
+                    "action prepares nothing and nothing is installed "
+                    "on the device — it stops safely with a message."
                 ),
-                _build_maintenance_action_button(
-                    name="Install prepared firmware",
-                    icon="mdi:download-circle",
-                    service=f"{DOMAIN}.install_prepared_firmware",
-                    data={**action_target, "confirmed": True},
-                    confirmation_text=(
-                        f"Install the prepared firmware on {label}? The "
-                        "device will restart and be briefly unavailable "
-                        "while it reconnects."
-                    ),
+            )
+        )
+        actions.append(
+            _build_maintenance_action_button(
+                name="Install prepared firmware",
+                icon="mdi:download-circle",
+                service=f"{DOMAIN}.install_prepared_firmware",
+                data={**action_target, "confirmed": True},
+                confirmation_text=(
+                    f"Install the prepared firmware on {label}? The "
+                    "device will restart and be briefly unavailable "
+                    "while it reconnects."
                 ),
-                _build_maintenance_action_button(
-                    name="Refresh device dashboard",
-                    icon="mdi:refresh",
-                    service=f"{DOMAIN}.refresh_customer_dashboard",
-                    data=dict(action_target),
-                    confirmation_text=None,
-                ),
-            ],
-        }
+            )
+        )
+    actions.append(
+        _build_maintenance_action_button(
+            name="Refresh device dashboard",
+            icon="mdi:refresh",
+            service=f"{DOMAIN}.refresh_customer_dashboard",
+            data=dict(action_target),
+            confirmation_text=None,
+        )
     )
+    cards.append({"type": "horizontal-stack", "cards": actions})
     return {"type": "vertical-stack", "cards": cards}
 
 
 _MAINTENANCE_INTRO = (
     "Maintain your PVAutonomy devices here.\n\n"
-    "1. **Prepare firmware** — builds new firmware for the device "
-    "(nothing is installed yet).\n"
-    "2. Watch the device **status** until preparation has completed.\n"
-    "3. **Install prepared firmware** — installs it after your "
-    "confirmation; the device restarts and reconnects.\n"
-    "4. If the device dashboard looks outdated afterwards, use "
+    "1. **Prepare firmware** — **not available in this version.** The "
+    "supported local preparation path is not delivered yet, so this "
+    "action stops safely with a message and nothing on the device is "
+    "changed.\n"
+    "2. **Install prepared firmware** — installs a firmware that was "
+    "already prepared earlier, after your confirmation; the device "
+    "restarts and reconnects.\n"
+    "3. If the device dashboard looks outdated afterwards, use "
     "**Refresh device dashboard**."
 )
 
+# PD-16 / PD-18 (A-4a1): the Community Alpha shows no firmware actions here;
+# the user builds and installs the firmware, as the setup describes.
+_MAINTENANCE_INTRO_ALPHA = (
+    "Maintain your PVAutonomy devices here.\n\n"
+    "You build and install the firmware yourself, as described when a new "
+    "controller is set up; this view does not prepare or install firmware. "
+    "If a device dashboard looks outdated, use **Refresh device dashboard**."
+)
+
 _NO_TARGETS_TEXT = (
-    "No configured PVAutonomy devices are currently available. Set up a "
-    "device first — its maintenance actions will appear here "
-    "automatically."
+    "No configured PVAutonomy devices are currently available. A device "
+    "that is already running in your home network can be registered via "
+    "**Settings → Devices & Services → PVAutonomy**; its maintenance "
+    "actions will appear here automatically."
 )
 
 
 # --- Help / Setup Guidance view (M2/#168 WP2B2; PD-05, PD-06) ---
 # Guidance and navigation ONLY: the wizard (config flow) stays the single
 # canonical commissioning path (PD-06) and the Maintenance view owns the
-# firmware actions. Help never calls a service. Factory-WiFi / captive-
-# portal / connection guidance appears as concise contextual help text
-# (PD-05) — never as a recreated WiFi tab.
+# firmware actions. Help never calls a service, and never recreates a WiFi
+# tab (PD-05).
+#
+# [PD-15/WP3A closure; amended PD-16] The guidance describes only what
+# the shipped state actually offers. PD-16 (#238) reopened new-device
+# setup as the Community Alpha self-build path, so Help points at the
+# wizard for it (#286). Firmware preparation is still default-denied
+# (WP3A-2), so Help must not promise that. Factory-WiFi guidance no
+# longer points at the temporary setup network / captive-portal path
+# that PD-14 and ADR-0005 retired; it says the older instruction no
+# longer applies and invites credential entry nowhere. The Web-Serial
+# successor path is not implemented, so it is not described here either.
 
 _HELP_START_HERE = (
     "## Start here\n\n"
     "1. Pick your device in the sections below and open its dashboard.\n"
-    "2. To set up a new device — or to change an existing one — open "
-    "**Settings → Devices & Services → PVAutonomy** and follow the guided "
-    "Setup or Reconfigure steps.\n"
-    "3. For firmware updates use the **Maintenance** view: prepare the "
-    "firmware first, install it after preparation has completed, then let "
-    "the device reconnect.\n\n"
-    "No developer tools and no manual configuration files are required — "
-    "everything runs through these guided steps."
+    "2. To register a device that is already running in your home "
+    "network, open **Settings → Devices & Services → PVAutonomy** and "
+    "choose **Adopt a running controller**. Nothing is built, installed or "
+    "reflashed.\n"
+    "3. To set up a new controller, open **Settings → Devices & Services → "
+    "PVAutonomy** and choose **Set up a new controller**. PVAutonomy "
+    "prepares what the controller needs; you build and install its "
+    "firmware yourself, following the instructions the setup shows you.\n"
+    "4. In the **Maintenance** view you can install a firmware that was "
+    "already prepared earlier and refresh a device dashboard. "
+    "**Preparing new firmware is not available in this version.**"
+)
+
+# PD-16 / PD-18 (A-4a1): step 4 without the firmware actions.
+_HELP_START_HERE_ALPHA = _HELP_START_HERE.replace(
+    "4. In the **Maintenance** view you can install a firmware that was "
+    "already prepared earlier and refresh a device dashboard. "
+    "**Preparing new firmware is not available in this version.**",
+    "4. In the **Maintenance** view you can refresh a device dashboard.",
 )
 
 _HELP_NO_DEVICES_TEXT = (
-    "No configured PVAutonomy device is currently available. Set up your "
-    "first device via **Settings → Devices & Services → PVAutonomy** — its "
-    "guidance will appear here automatically."
+    "No configured PVAutonomy device is currently available. A device "
+    "that is already running in your home network can be registered via "
+    "**Settings → Devices & Services → PVAutonomy** with **Adopt a "
+    "running controller** — its guidance will appear here automatically. "
+    "To set up a new controller, choose **Set up a new controller** in the "
+    "same place."
 )
 
 _HELP_RECOVERY = (
     "## If something needs attention\n\n"
     "- Check the status shown for the device before repeating an action.\n"
-    "- Setup or Reconfigure can safely be re-run at any time from "
-    "**Settings → Devices & Services → PVAutonomy**.\n"
+    "- Adopting a running controller can safely be repeated at any time "
+    "from **Settings → Devices & Services → PVAutonomy**.\n"
     "- After a firmware installation, allow the device to restart and "
     "reconnect — this can take a few minutes. Do not disconnect power "
     "while an installation is running.\n"
     "- If a device dashboard looks outdated, use **Refresh device "
     "dashboard** in the Maintenance view.\n"
-    "- If a brand-new device is not found during setup, check that it is "
-    "powered on and connected to your WiFi. A factory-fresh device first "
-    "provides its own temporary setup network — the guided Setup steps "
-    "walk you through connecting it to your home network."
+    "- A new controller is set up from **Settings → Devices & Services → "
+    "PVAutonomy**, not from here. Older guidance about connecting to a "
+    "temporary setup network provided by the device no longer applies and "
+    "should not be followed."
 )
 
 # Contextual guidance mapped ONLY to verified status-sensor states
@@ -2424,7 +2476,7 @@ _HELP_CONTEXT_TEXT: dict[str, str] = {
     "degraded": (
         "**Setup needed:** Some information for this device is missing or "
         "incomplete. Open **Settings → Devices & Services → PVAutonomy** "
-        "and continue Setup or Reconfigure for this device."
+        "and check this device's options there."
     ),
     "warn": (
         "**Attention:** The device may be offline or not fully connected. "
@@ -2434,9 +2486,8 @@ _HELP_CONTEXT_TEXT: dict[str, str] = {
     ),
     "error": (
         "**Something needs attention:** Check the status shown above for "
-        "details. If a preparation or installation is still running, let "
-        "it finish before trying again — then retry from the Maintenance "
-        "view, or re-run Setup/Reconfigure."
+        "details. If an installation is still running, let it finish "
+        "before trying again — then retry from the Maintenance view."
     ),
     "ok": (
         "**Ready:** No setup action is needed right now. Use the device "
@@ -2504,9 +2555,9 @@ def _build_help_target_section(target: dict[str, Any]) -> dict[str, Any]:
             {
                 "type": "markdown",
                 "content": (
-                    "Status is not available for this device right now. You "
-                    "can still open its dashboard above, re-run the guided "
-                    "Setup/Reconfigure, or use the Maintenance view."
+                    "Status is not available for this device right now. "
+                    "You can still open its dashboard above or use the "
+                    "Maintenance view."
                 ),
             }
         )
@@ -2551,7 +2602,14 @@ def _build_help_view(
     """
     cards: list[dict[str, Any]] = [
         build_managed_notice_card(),
-        {"type": "markdown", "content": _HELP_START_HERE},
+        {
+            "type": "markdown",
+            "content": (
+                _HELP_START_HERE
+                if _const.managed_paths_enabled()
+                else _HELP_START_HERE_ALPHA
+            ),
+        },
     ]
     if legacy_artifacts:
         cards.append(build_legacy_migration_card())
@@ -2567,7 +2625,12 @@ def _build_maintenance_view(targets: list[dict[str, Any]]) -> dict[str, Any]:
     """The Maintenance view: notice, orientation, one section per target."""
     cards: list[dict[str, Any]] = [build_managed_notice_card()]
     if targets:
-        cards.append({"type": "markdown", "content": _MAINTENANCE_INTRO})
+        intro = (
+            _MAINTENANCE_INTRO
+            if _const.managed_paths_enabled()
+            else _MAINTENANCE_INTRO_ALPHA
+        )
+        cards.append({"type": "markdown", "content": intro})
         cards.extend(
             _build_maintenance_target_section(target) for target in targets
         )

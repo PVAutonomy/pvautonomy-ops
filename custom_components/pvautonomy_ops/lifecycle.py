@@ -111,6 +111,7 @@ async def reconfigure_device(
         LifecycleResult with transition details.
     """
     from .flash_uploader import get_ota_password, ota_upload_with_retry, resolve_device_ip, OTAError, OTA_DEFAULT_PORT
+    from .log_safety import safe_exc_text
     from .pipeline import run_build_pipeline
 
     import time
@@ -274,10 +275,10 @@ async def reconfigure_device(
         _fire("failed", 100, error=result.error)
         _LOGGER.error(result.error)
     except Exception as exc:
-        result.error = f"Re-configure failed: {exc}"
+        result.error = f"Re-configure failed: {safe_exc_text(exc)}"
         result.duration_s = time.monotonic() - start_time
         _fire("failed", 100, error=result.error)
-        _LOGGER.exception(result.error)
+        _LOGGER.error(result.error)
 
     return result
 
@@ -311,6 +312,7 @@ async def factory_reset_device(
     """
     from .flash_uploader import get_ota_password, ota_upload_with_retry, resolve_device_ip, OTAError, OTA_DEFAULT_PORT
     from .artifacts import ArtifactError, download_artifact, verify_artifact
+    from .log_safety import safe_exc_text
 
     import tempfile
     import time
@@ -496,10 +498,10 @@ async def factory_reset_device(
         _fire("failed", 100, error=result.error)
         _LOGGER.error(result.error)
     except Exception as exc:
-        result.error = f"Factory Reset failed: {exc}"
+        result.error = f"Factory Reset failed: {safe_exc_text(exc)}"
         result.duration_s = time.monotonic() - start_time
         _fire("failed", 100, error=result.error)
-        _LOGGER.exception(result.error)
+        _LOGGER.error(result.error)
     finally:
         import shutil
         await hass.async_add_executor_job(shutil.rmtree, temp_dir, True)

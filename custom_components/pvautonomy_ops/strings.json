@@ -3,12 +3,10 @@
     "step": {
       "user": {
         "title": "PVAutonomy Setup",
-        "description": "How would you like to add your PVAutonomy device?\n\n**Managed Build Service** — PVAutonomy builds and flashes your firmware. Requires a PVAutonomy Build-Key.\n\n**Register a running device** — your device is already running. Nothing is built or flashed.\n\n**Local ESPHome build** — build and flash firmware yourself using ESPHome. No Build-Key required.\n\n**Advanced / self-hosted proxy** — use a custom proxy URL and credentials.",
+        "description": "Choose how to continue.\n\n**Set up a new controller** — Sets up your PVAutonomy controller (currently: Edge101), the small box that connects to your inverter by cable. PVAutonomy prepares everything it needs and asks once for your Wi-Fi network. You build and install the controller's firmware yourself with the ESPHome tool — the \"Local ESPHome self-build\" guide walks you through every step; a USB cable is needed once. Nothing on the inverter itself is changed during setup. Once the controller is running, come back here and choose \"Adopt a running controller\".\n\n**Adopt a running controller** — Registers a controller that is already running. Nothing is built, installed, or reflashed.",
         "menu_options": {
-          "managed_build": "Build and flash firmware with PVAutonomy Managed Service",
-          "adopt_direct": "Register an already-running device (no firmware build)",
-          "local_esphome": "Build and flash firmware yourself (ESPHome)",
-          "advanced_proxy": "Advanced / self-hosted proxy"
+          "setup_new": "Set up a new controller",
+          "adopt_existing": "Adopt a running controller"
         }
       },
       "managed_key": {
@@ -23,7 +21,19 @@
       },
       "local_esphome_guide": {
         "title": "Build Firmware with ESPHome",
-        "description": "Build and flash your firmware locally using ESPHome — no PVAutonomy Build-Key required.\n\n**Steps:**\n1. Select your inverter model on the next screens.\n2. Build firmware using ESPHome Dashboard or ESPHome CLI.\n3. Use your own api.encryption.key and ota.password.\n4. Flash your device.\n5. Return to PVAutonomy and choose **Register an already-running device**."
+        "description": "On the next screens you choose your inverter model. After that you build the firmware with the ESPHome Device Builder and transfer it to the controller over USB — the \"Local ESPHome self-build\" guide walks you through every step. PVAutonomy prepares the credentials the build needs."
+      },
+      "local_wifi_credentials": {
+        "title": "Wi-Fi for the device",
+        "description": "The firmware you are about to build needs to know which Wi-Fi network to join.\n\nPVAutonomy stores what you enter here in your ESPHome `secrets.yaml` as `wifi_ssid` and `wifi_password`, so the build finds them. Entries that are already in that file are never changed, and this screen only appears for the ones that are missing.\n\nThe entry travels from this page to Home Assistant the same way every other setting you type into Home Assistant does, and is then stored in that file on this instance. It is not sent to PVAutonomy or anywhere else, and Home Assistant does not display it again.",
+        "data": {
+          "wifi_ssid": "Wi-Fi network name (SSID)",
+          "wifi_password": "Wi-Fi password"
+        },
+        "data_description": {
+          "wifi_ssid": "Must be a 2.4 GHz network — the device has no 5 GHz radio. Type the name exactly as it appears, including capitals. Up to 32 characters.",
+          "wifi_password": "The passphrase of that 2.4 GHz network: 8 to 63 characters, letters, digits, spaces and ordinary punctuation."
+        }
       },
       "proxy": {
         "title": "Self-hosted Proxy Connection",
@@ -65,6 +75,13 @@
           "number": "Device number at this site (1-10)."
         }
       },
+      "local_yaml_confirm_existing": {
+        "title": "Device already exists",
+        "description": "A device named `{device_name}` already exists in this Home Assistant, and\nthe settings you entered produce the same node name `{node_name}`.\n\nContinuing means building firmware for **exactly this device** — that is\nwhat a deliberate re-flash looks like, and it is fine if that is what you\nwant.\n\nFor a **new** device, go back and choose a different site or device\nnumber. Otherwise the new firmware would carry the identity of the device\nabove.\n",
+        "data": {
+          "confirm_rebuild": "Yes, rebuild firmware for this existing device"
+        }
+      },
       "target_device": {
         "title": "Select Target Device",
         "description": "Choose the physical device (from Home Assistant) to bind to this configuration. Only ESPHome devices with a known MAC address are shown.",
@@ -72,7 +89,7 @@
           "ha_device_id": "Target device"
         },
         "data_description": {
-          "ha_device_id": "Select the ESPHome device to configure. Devices already bound to another PVAutonomy entry are not shown."
+          "ha_device_id": "Select the ESPHome device to configure. Devices that PVAutonomy already knows are marked \"— re-flash\". A device bound to another PVAutonomy entry cannot be adopted a second time."
         }
       },
       "confirm_relocate": {
@@ -150,8 +167,8 @@
         }
       },
       "local_yaml_ready": {
-        "title": "Device YAML Ready",
-        "description": "Your ESPHome device YAML was generated and saved to:\n\n`{yaml_path}`\n\n**Next steps:**\n\n1. Open the file with the File Editor add-on, Samba, or Terminal/SSH.\n2. Compile it with ESPHome Dashboard or ESPHome CLI.\n3. Add these entries to your ESPHome **secrets.yaml**:\n   ```\n   api_encryption_key: <your 32-byte base64 key>\n   ota_password: <your OTA password>\n   ```\n4. Build and flash the device.\n5. Return to PVAutonomy and choose **Register an already-running device**.\n\nNo PVAutonomy Build-Key is required for this path."
+        "title": "Ready to Flash",
+        "description": "The configuration for your controller is ready — the ESPHome Device Builder already lists it as a device.\n\n**Next steps:**\n\n1. Open the ESPHome Device Builder. On the device, in the **⋮ menu: Validate**, then **Install** — with the controller connected by a USB data cable.\n2. Once the controller is running, return to PVAutonomy and choose \"Adopt a running controller\"."
       }
     },
     "progress": {
@@ -163,6 +180,7 @@
       "proxy_too_old": "Build proxy does not support auto-identification (/whoami). Please update the proxy or contact support.",
       "proxy_auth_failed": "API key rejected by proxy. Please check your API key.",
       "site_too_short": "Site name must be at least 2 characters.",
+      "site_conflicts_with_preset": "You typed a custom site name but selected \"{preset}\". Choose \"Custom…\" to use your text, or clear the field to use the preset.",
       "number_out_of_range": "Device number must be between 1 and 10.",
       "no_device_selected": "Please select a target device.",
       "device_not_found": "Selected device not found in Home Assistant.",
@@ -173,8 +191,13 @@
       "build_key_rejected": "Build-Key not recognised. Check your Build-Key or contact PVAutonomy.",
       "build_service_unavailable": "PVAutonomy Build Service is currently unavailable. Check your internet connection and try again.",
       "build_account_incomplete": "Build-Key accepted, but account setup is not complete. Contact PVAutonomy support.",
-      "missing_required_entities": "The selected device does not expose the expected PVAutonomy ESPHome entities. Regenerate the YAML through Local ESPHome, avoid renaming generated entities, flash the device again, wait until Home Assistant has created all ESPHome entities, then retry Adopt Direct.",
-      "entity_surface_validation_failed": "The entity-surface contract could not be loaded for this model. The PVAutonomy integration may be incomplete or corrupted. Try reinstalling or updating the integration (HACS or installer), then retry Adopt Direct."
+      "missing_required_entities": "The selected device does not expose the expected PVAutonomy ESPHome entities. Generate the device configuration again with \"Set up a new controller\", do not rename generated entities, flash the device again, wait until Home Assistant has created all ESPHome entities, then choose \"Adopt a running controller\" again.",
+      "entity_surface_validation_failed": "The entity-surface contract could not be loaded for this model. The PVAutonomy integration may be incomplete or corrupted. Try reinstalling or updating the integration (through HACS or by hand), then choose \"Adopt a running controller\" again.",
+      "confirm_rebuild_required": "Tick the box to confirm you are rebuilding firmware for this existing device.",
+      "wifi_ssid_required": "Enter the name of the 2.4 GHz Wi-Fi network the device should join.",
+      "wifi_ssid_invalid": "That is not a usable network name. An SSID is at most 32 characters and contains no control characters. Check it against what your router shows.",
+      "wifi_password_required": "Enter the password of that Wi-Fi network. An empty entry would be stored as an empty secret, and the build would fail on it.",
+      "wifi_password_invalid": "That is not a usable WPA2 passphrase. It must be 8 to 63 characters long and use only letters, digits, spaces and ordinary punctuation. If your network needs something else, write the entry into your ESPHome secrets.yaml yourself before running the wizard."
     },
     "abort": {
       "already_configured": "This device is already configured.",
@@ -183,7 +206,13 @@
       "device_already_bound": "Device is already bound to another configuration.",
       "compile_secret_missing_or_invalid": "Build encryption is not configured. Please complete PVAutonomy operator provisioning (COMPILE_SECRET_KEY) before starting a firmware build.",
       "managed_build_not_configured": "Firmware builds are not yet active for your account. Contact your PVAutonomy provider to activate the managed build service.",
-      "local_yaml_exported": "Local ESPHome YAML exported. Build and flash the device with ESPHome, then return to register the running device."
+      "local_build_install_not_available": "The supported free local build and installation path is not available in this version yet. Setup stopped safely; it did not use a Managed service, hosted proxy, or manual YAML export.",
+      "local_yaml_exported": "Local ESPHome YAML exported. Build and flash the device with ESPHome, then return to register the running device.",
+      "local_yaml_target_exists": "A file named `{node_name}.yaml` already exists in `/config/esphome/`.\nSetup stopped without touching it — it may be a device configuration\nyou edited.\n\nWhat you can do: rename or remove the existing file in the ESPHome\nDevice Builder, or run setup again with a different site or device\nnumber.",
+      "local_yaml_generation_failed": "The device YAML for `{node_name}` could not be generated, so nothing was written and there is no file to build. Setup stopped here rather than report success.\n\nError: {error}\n\nWhat you can do: check the Home Assistant log for `pvautonomy_ops` for the full traceback, confirm you picked the right manufacturer and inverter model, and start the setup again. If it keeps failing for a supported model, please report it with that log excerpt — do not include your `secrets.yaml`.",
+      "local_yaml_write_failed": "The device YAML for `{node_name}` was generated but could not be saved to `/config/esphome/`, so there is no file to build. Setup stopped here rather than report success.\n\nError: {error}\n\nWhat you can do: check that the `/config` directory is writable and has free space, then start the setup again. With the File Editor add-on, Samba, or Terminal/SSH you can verify the `esphome` folder yourself.",
+      "local_secrets_write_failed": "Your ESPHome `secrets.yaml` could not be prepared, so the entries the build needs are not in place and there is no point generating a device YAML. Setup stopped here rather than report success. Nothing in that file was changed.\n\nError: {error}\n\nWhat you can do: check that `/config/esphome/` is writable and has free space, and that `secrets.yaml` there is valid YAML — one `name: value` per line. With the File Editor add-on, Samba, or Terminal/SSH you can open it yourself. Then start the setup again.",
+      "managed_paths_not_available": "This setup path is not part of the PVAutonomy Community Alpha. Use \"Set up a new controller\" or \"Adopt a running controller\"."
     }
   },
   "entity": {
@@ -232,7 +261,7 @@
       },
       "settings": {
         "title": "Settings",
-        "description": "Configure proxy, build, and OTA settings.",
+        "description": "Configure device and maintenance settings.",
         "data": {
           "selected_device": "Active device",
           "poll_interval_sec": "Poll interval (seconds)",
@@ -410,6 +439,9 @@
     }
   },
   "exceptions": {
+    "build_path_not_available": {
+      "message": "Firmware building is not available in this version. This device has no supported build path enabled, so no firmware was built and nothing was installed."
+    },
     "device_not_set_up": {
       "message": "Device “{device_name}” is not yet set up in PVAutonomy. Open Settings > Devices & Services > PVAutonomy Ops and either adopt the running device or run setup."
     },

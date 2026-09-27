@@ -24,6 +24,7 @@ function) which runs the shared Auto Configure → Compile → store flow.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -49,6 +50,7 @@ async def async_build_firmware_for_device(
     entry_data: dict[str, Any],
     device_name: str | None = None,
     force_rebuild: bool = False,
+    credential_rotation: bool = False,
 ) -> dict[str, Any]:
     """Build production firmware for one metadata-backed device, build-only.
 
@@ -62,12 +64,16 @@ async def async_build_firmware_for_device(
             device is used; otherwise the call fails closed.
         force_rebuild: When True, bypass the proxy artifact cache for a cold
             build (registry-only update scenario).
+        credential_rotation: Build with a locally staged pending API/OTA
+            credential pair. This always forces a cold build and never changes
+            the active credentials used by the running device.
 
     Returns:
         A dict of safe build metadata (no secret values):
         ``build_id``, ``cache_hit``, ``artifact_path``, ``firmware_size``,
         ``target_device``, ``registry_file``, ``build_backend``,
-        ``force_rebuild``, ``duration_s``, ``is_simulated``.
+        ``force_rebuild``, ``credential_rotation``, ``duration_s``,
+        ``is_simulated``.
 
     Raises:
         HomeAssistantError (fail-closed) on: missing metadata store, ambiguous
@@ -150,10 +156,36 @@ async def async_build_firmware_for_device(
     target_device = metadata.device_id
     mac_suffix = await async_resolve_metadata_mac_suffix(hass, metadata)
 
+    # Credential rotation is an explicit two-phase path. Generate/preserve the
+    # pending pair locally before the build, but leave the active pair untouched
+    # so the later OTA upload can still authenticate to the running firmware.
+    if credential_rotation:
+        if not mac_suffix:
+            raise HomeAssistantError(
+                f"{_SERVICE}: credential rotation requires a verified device "
+                "MAC suffix"
+            )
+        from .credential_rotation import (
+            CredentialRotationError,
+            stage_device_rotation_sync,
+        )
+
+        try:
+            await hass.async_add_executor_job(
+                stage_device_rotation_sync, hass.config.config_dir, mac_suffix
+            )
+        except CredentialRotationError as exc:
+            raise HomeAssistantError(
+                f"{_SERVICE}: cannot stage credential rotation for "
+                f"{target_device}: {exc}"
+            ) from exc
+
+    effective_force_rebuild = force_rebuild or credential_rotation
+
     _LOGGER.info(
         "%s: starting build-only pipeline (entry=%s, device=%s, model=%s, "
         "registry=%s, backend=%s, tier=%s, modbus_version=%s, "
-        "map_confirmed=%s, force_rebuild=%s)",
+        "map_confirmed=%s, force_rebuild=%s, credential_rotation=%s)",
         _SERVICE,
         entry_id[:8] if entry_id else "",
         target_device,
@@ -163,7 +195,8 @@ async def async_build_firmware_for_device(
         selected_tier,
         modbus_version,
         map_confirmed,
-        force_rebuild,
+        effective_force_rebuild,
+        credential_rotation,
     )
 
     result = await run_build_pipeline(
@@ -179,7 +212,8 @@ async def async_build_firmware_for_device(
         selected_tier=selected_tier,
         modbus_version=modbus_version,
         map_confirmed=map_confirmed,
-        force_rebuild=force_rebuild,
+        force_rebuild=effective_force_rebuild,
+        credential_rotation=credential_rotation,
         entry_id=entry_id,
     )
 
@@ -190,13 +224,43 @@ async def async_build_firmware_for_device(
         )
 
     # Fail closed: a force-rebuild that came back from cache did NOT cold-build.
-    if force_rebuild and result.cache_hit:
+    if effective_force_rebuild and result.cache_hit:
         raise HomeAssistantError(
             f"{_SERVICE}: force_rebuild was requested but the proxy returned a "
             f"cached artifact for {target_device} "
             f"(Build-ID: {result.build_job_id}) — cache bypass failed, "
             "refusing to report success"
         )
+
+    # Bind the prepared binary to the exact pending credential pair using only
+    # SHA-256 digests. A stale marker next to a later normal build cannot pass
+    # artifact-digest validation; rotation builds replace it explicitly.
+    if credential_rotation:
+        from .credential_rotation import (
+            CredentialRotationError,
+            invalidate_rotation_marker_sync,
+            write_rotation_marker_sync,
+        )
+
+        try:
+            await hass.async_add_executor_job(
+                invalidate_rotation_marker_sync, result.artifact_path
+            )
+            await hass.async_add_executor_job(
+                partial(
+                    write_rotation_marker_sync,
+                    hass.config.config_dir,
+                    result.artifact_path,
+                    target_device=target_device,
+                    mac_suffix=mac_suffix,
+                    build_id=result.build_job_id,
+                )
+            )
+        except CredentialRotationError as exc:
+            raise HomeAssistantError(
+                f"{_SERVICE}: failed to bind rotation artifact for "
+                f"{target_device}: {exc}"
+            ) from exc
 
     metadata_out: dict[str, Any] = {
         "build_id": result.build_job_id,
@@ -206,20 +270,22 @@ async def async_build_firmware_for_device(
         "target_device": target_device,
         "registry_file": metadata.registry_file,
         "build_backend": result.build_backend,
-        "force_rebuild": force_rebuild,
+        "force_rebuild": effective_force_rebuild,
+        "credential_rotation": credential_rotation,
         "duration_s": round(result.duration_s, 1),
         "is_simulated": result.is_simulated,
     }
 
     _LOGGER.info(
         "%s: build complete for %s — build_id=%s, size=%d bytes, "
-        "cache_hit=%s, backend=%s, artifact=%s",
+        "cache_hit=%s, backend=%s, credential_rotation=%s, artifact=%s",
         _SERVICE,
         target_device,
         result.build_job_id,
         result.firmware_size,
         result.cache_hit,
         result.build_backend,
+        credential_rotation,
         result.artifact_path,
     )
     return metadata_out

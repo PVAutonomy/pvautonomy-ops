@@ -34,6 +34,9 @@ def is_pvautonomy_managed(filepath: Path) -> bool:
     """Check if a YAML file was created by PVAutonomy (contains MANAGED_HEADER).
 
     Safe to call on any file; returns False if file doesn't exist or can't be read.
+    ``readline()`` decodes the first buffered chunk of the file, not only the
+    first line: an invalid UTF-8 byte inside that chunk returns False, and a
+    byte beyond it is never decoded, so the header line decides (#336).
     """
     try:
         if not filepath.is_file():
@@ -41,7 +44,7 @@ def is_pvautonomy_managed(filepath: Path) -> bool:
         with filepath.open("r", encoding="utf-8") as f:
             first_line = f.readline()
         return first_line.strip() == MANAGED_HEADER.strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
 
 

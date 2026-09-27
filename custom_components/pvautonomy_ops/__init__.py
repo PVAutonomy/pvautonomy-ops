@@ -8,6 +8,7 @@ Contract: ops-contract-v1.md (v1.0.0)
 Directive: D-ADDON-002, D-ADDON-BASELINE-SEC-001, EPIC-006-WP3
 """
 import logging
+from typing import Any
 from collections.abc import Mapping
 from datetime import timedelta
 
@@ -18,14 +19,15 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
-    BUILD_BACKEND_ESPHOME_DASHBOARD,
-    BUILD_BACKEND_MANUAL,
+    BUILD_BACKEND_PERSISTED_KEY,
+    BUILD_FIRMWARE_SUPPORTED_BACKENDS,
     CONF_ARTIFACT_CHANNEL,
     CONF_ARTIFACT_HW_FAMILY,
     CONF_ARTIFACT_OWNER,
     CONF_ARTIFACT_REPO,
     CONF_BUILD_BACKEND,
     CONF_ENVELOPE_MODE_ENABLED,
+    CONF_STAGING_BUILD_ENABLED,
     CONF_FLASH_MIN_SIZE_KB,
     CONF_GATES_FRESHNESS_MIN,
     CONF_MAP_CONFIRMED,
@@ -45,6 +47,7 @@ from .const import (
     DEFAULT_ARTIFACT_OWNER,
     DEFAULT_ARTIFACT_REPO,
     DEFAULT_BUILD_BACKEND,
+    DEFAULT_STAGING_BUILD_ENABLED,
     DEFAULT_ENVELOPE_MODE_ENABLED,
     DEFAULT_FLASH_MIN_SIZE_KB,
     DEFAULT_GATES_FRESHNESS_MIN,
@@ -59,6 +62,7 @@ from .const import (
     SETUP_STATE_ADOPTED,
     VERSION,
 )
+from . import const as _const
 from .const import ENTRY_KIND, ENTRY_KIND_INSTALLATION_ANCHOR
 from .discovery import ContractInputReader
 from .grid_power import GRID_POWER_MANAGER_KEY, GridPowerManager
@@ -139,6 +143,15 @@ def get_runtime_config(entry: ConfigEntry) -> dict:
         Dict with all runtime config values (guaranteed complete with defaults).
     """
     opts = entry.options
+    # PD-15/WP3A-2: ONE resolution drives both the runtime backend value and
+    # its provenance, so the two cannot drift apart. `entry.data` is
+    # deliberately NOT consulted: no writer in this integration ever persists
+    # CONF_BUILD_BACKEND there (every async_create_entry uses `data={}`, every
+    # update writes `options=`), and no reader honours it. The options→data
+    # precedence used for CONF_ENVELOPE_MODE_ENABLED / CONF_STAGING_BUILD_ENABLED
+    # is an operator storage-edit escape hatch for those flags, not a legacy
+    # persistence path for the backend.
+    _backend_persisted = CONF_BUILD_BACKEND in opts
     return {
         CONF_POLL_INTERVAL: opts.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
         CONF_ARTIFACT_CHANNEL: opts.get(CONF_ARTIFACT_CHANNEL, DEFAULT_ARTIFACT_CHANNEL),
@@ -148,13 +161,33 @@ def get_runtime_config(entry: ConfigEntry) -> dict:
         CONF_FLASH_MIN_SIZE_KB: opts.get(CONF_FLASH_MIN_SIZE_KB, DEFAULT_FLASH_MIN_SIZE_KB),
         CONF_GATES_FRESHNESS_MIN: opts.get(CONF_GATES_FRESHNESS_MIN, DEFAULT_GATES_FRESHNESS_MIN),
         CONF_STRICT_GATES: opts.get(CONF_STRICT_GATES, DEFAULT_STRICT_GATES),
-        CONF_BUILD_BACKEND: opts.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND),
+        # DEFAULT_BUILD_BACKEND stays the *runtime* default — pipeline backend
+        # selection depends on it and must not change.
+        CONF_BUILD_BACKEND: (
+            opts[CONF_BUILD_BACKEND] if _backend_persisted else DEFAULT_BUILD_BACKEND
+        ),
+        # Provenance for the service authorization: once materialized, a
+        # defaulted value is indistinguishable from a configured one, so an
+        # entry that never persisted a backend would present as `proxy_remote`
+        # and satisfy the service allowlist. Authorization must never accept a
+        # default. Driven by the SAME predicate as the value above, so the two
+        # can never disagree about which source won. Internal key, same
+        # convention as `_entry_id`; never a user-facing option.
+        BUILD_BACKEND_PERSISTED_KEY: _backend_persisted,
         CONF_SIMULATED_FAILURE_MODE: opts.get(CONF_SIMULATED_FAILURE_MODE, DEFAULT_SIMULATED_FAILURE_MODE),
         # G6 (ADR-0003 D-E): hidden envelope force-disable. Options win;
         # entry.data is honored so an operator storage-edit works either way.
         CONF_ENVELOPE_MODE_ENABLED: opts.get(
             CONF_ENVELOPE_MODE_ENABLED,
             entry.data.get(CONF_ENVELOPE_MODE_ENABLED, DEFAULT_ENVELOPE_MODE_ENABLED),
+        ),
+        # PD-15/WP3A-2: internal staging enablement for the dormant hosted
+        # build. Same options-then-data resolution as the envelope flag so an
+        # operator storage-edit works either way, but defaults OFF. Never
+        # exposed in a customer-facing schema.
+        CONF_STAGING_BUILD_ENABLED: opts.get(
+            CONF_STAGING_BUILD_ENABLED,
+            entry.data.get(CONF_STAGING_BUILD_ENABLED, DEFAULT_STAGING_BUILD_ENABLED),
         ),
         # Proxy Remote Build Backend (EPIC-005-D1)
         CONF_PROXY_BASE_URL: opts.get(CONF_PROXY_BASE_URL, DEFAULT_PROXY_BASE_URL),
@@ -624,8 +657,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Run initial update
         await periodic_update()
 
-        # EPIC-006-WP3 Phase 7: Async build kickoff for newly created entries
-        if _trigger_initial_build:
+        # EPIC-006-WP3 Phase 7: Async build kickoff for newly created entries.
+        # PD-16 / PD-18: the Community Alpha has no Managed Build (A-4a1).
+        if _trigger_initial_build and _const.managed_paths_enabled():
             hass.async_create_task(
                 _async_initial_build(hass, metadata_store, runtime_config)
             )
@@ -748,6 +782,7 @@ async def _async_initial_build(
     """
     from .pipeline import run_build_pipeline
     from .flash_uploader import resolve_device_ip, get_ota_password, ota_upload_with_retry, OTA_DEFAULT_PORT
+    from .log_safety import safe_exc_text
 
     # EPIC-015 P2-05: Find the device metadata for this entry.
     # Prefer ha_device_id match over get_all()[0] to avoid wrong-device risk.
@@ -875,11 +910,11 @@ async def _async_initial_build(
         )
 
     except Exception as exc:
-        fire_flash_stage("failed", 0, error=str(exc))
+        fire_flash_stage("failed", 0, error=safe_exc_text(exc))
         _LOGGER.warning(
-            "Initial build/OTA failed for %s (non-fatal, device can be flashed manually)",
+            "Initial build/OTA failed for %s: %s (non-fatal, device can be flashed manually)",
             metadata.device_id,
-            exc_info=True,
+            safe_exc_text(exc),
         )
 
 
@@ -1059,6 +1094,94 @@ _DEVICE_NOT_SET_UP_MSG = (
 # placeholder names must match exceptions.* in strings.json/translations.
 _TK_DEVICE_NOT_SET_UP = "device_not_set_up"
 _TK_DEVICE_OWNERSHIP_AMBIGUOUS = "device_ownership_ambiguous"
+
+# ── PD-15/WP3A-2: service-level build authorization ─────────────────────────
+_TK_BUILD_PATH_NOT_AVAILABLE = "build_path_not_available"
+_BUILD_PATH_NOT_AVAILABLE_MSG = (
+    "Firmware building is not available in this version. This device has no "
+    "supported build path enabled, so no firmware was built and nothing was "
+    "installed."
+)
+
+
+def _staging_build_truthy(value: Any) -> bool:
+    """Strict truthy parser for the internal staging enablement.
+
+    Deliberately NOT :func:`pipeline._flag_enabled`. That helper serves a
+    *killswitch* and is permissive — anything outside ``false/0/off/no/""``
+    reads as ``True`` — because its safe direction is "stays on unless clearly
+    turned off". Here the safe direction is the exact opposite: a typo, a stray
+    value, or a half-finished storage edit must never *enable* a dormant hosted
+    build.
+
+    Only an explicit boolean ``True`` or one of ``"true"/"1"/"yes"/"on"``
+    (case-insensitive, whitespace-stripped) enables. Missing, ``None``, empty,
+    numeric and unknown values all read ``False``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def _authorize_build_firmware(entry_data: dict) -> None:
+    """Fail-closed authorization for ``pvautonomy_ops.build_firmware``.
+
+    Positive authorization by construction (PD-15/WP3A-2). The build may run
+    only when **both** predicates hold:
+
+    * the entry's *persisted runtime* backend is in
+      :data:`BUILD_FIRMWARE_SUPPORTED_BACKENDS`, **and**
+    * the internal staging enablement is explicitly true.
+
+    Everything else rejects: a runtime slot without ``config``, a missing,
+    empty or unknown backend, a known-but-unsupported backend, and a missing
+    or false staging flag.
+
+    Two deliberate properties:
+
+    * The backend is read from the **nested** runtime configuration
+      (``entry_data["config"]``), which is where ``_runtime_config`` actually
+      stores it — reading the outer slot silently matched nothing and made the
+      previous guard inert.
+    * :data:`DEFAULT_BUILD_BACKEND` is never consulted — neither directly nor
+      through the runtime config it materializes. ``get_runtime_config`` still
+      applies it as the *runtime* default (the pipeline needs that), so the
+      guard additionally requires
+      :data:`BUILD_BACKEND_PERSISTED_KEY`: a backend that was only defaulted,
+      never configured, does not authorize anything.
+
+    The customer-facing message is identical for every rejection cause; the
+    specific cause is logged at debug level for operators. Raises
+    ``HomeAssistantError``; returns ``None`` when authorized.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    def _deny(cause: str) -> None:
+        _LOGGER.debug("build_firmware denied: %s", cause)
+        raise HomeAssistantError(
+            _BUILD_PATH_NOT_AVAILABLE_MSG,
+            translation_domain=DOMAIN,
+            translation_key=_TK_BUILD_PATH_NOT_AVAILABLE,
+        )
+
+    config = entry_data.get("config")
+    if not isinstance(config, dict):
+        _deny("runtime slot has no config mapping")
+
+    if not config.get(BUILD_BACKEND_PERSISTED_KEY):
+        _deny(
+            "build backend was never persisted for this entry; the runtime "
+            "default must not authorize a build"
+        )
+
+    backend = config.get(CONF_BUILD_BACKEND)
+    if backend not in BUILD_FIRMWARE_SUPPORTED_BACKENDS:
+        _deny(f"backend not in supported allowlist (got {backend!r})")
+
+    if not _staging_build_truthy(config.get(CONF_STAGING_BUILD_ENABLED)):
+        _deny("internal staging enablement absent or not explicitly true")
 
 
 def _normalize_device_identifier(name: str) -> str:
@@ -1348,11 +1471,34 @@ _SERVICE_NAMES = (
     "compile_secret_key_status",
 )
 
+# PD-16 / PD-18 (A-4a1): Managed Build, Build-Key, Factory Reset and the
+# service-driven stepper. Registered only while const.managed_paths_enabled().
+_MANAGED_SERVICE_NAMES = frozenset(
+    {
+        "start_initial_setup",
+        "start_reconfigure",
+        "start_factory_reset",
+        "wizard_advance",
+        "wizard_abort",
+        "confirm_key_saved",
+        "build_firmware",
+        "install_prepared_firmware",
+        "set_compile_secret_key",
+        "clear_compile_secret_key",
+        "compile_secret_key_status",
+    }
+)
+
 
 def _async_remove_services(hass: HomeAssistant) -> None:
-    """Remove all pvautonomy_ops services (last entry unloaded). EPIC-015 P1-06."""
+    """Remove all pvautonomy_ops services (last entry unloaded). EPIC-015 P1-06.
+
+    Only services that are registered are removed: with the managed paths
+    disabled, the managed services never were (A-4a1).
+    """
     for service_name in _SERVICE_NAMES:
-        hass.services.async_remove(DOMAIN, service_name)
+        if hass.services.has_service(DOMAIN, service_name):
+            hass.services.async_remove(DOMAIN, service_name)
     _LOGGER.info("Removed all %s services (last entry unloaded)", DOMAIN)
 
 
@@ -1367,6 +1513,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     # Optional entry_id added to all service schemas (P1-06)
     _ENTRY_ID_FIELD = {vol.Optional("entry_id"): cv.string}
+
+    managed = _const.managed_paths_enabled()
+
+    def _register_managed(domain, service, handler, **kwargs) -> None:
+        """Register a managed service only while the managed paths are on."""
+        if managed:
+            hass.services.async_register(
+                domain, service, handler, **kwargs
+            )
 
     WIZARD_CONTEXT_SCHEMA = vol.Schema(
         {
@@ -1486,27 +1641,27 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         wizard: WizardEngine = entry_data["wizard_engine"]
         await wizard.confirm_key_saved()
 
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "start_initial_setup", handle_start_initial_setup,
         schema=vol.Schema({vol.Optional("device_id"): cv.string, **_ENTRY_ID_FIELD}),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "start_reconfigure", handle_start_reconfigure,
         schema=vol.Schema({vol.Optional("device_id"): cv.string, **_ENTRY_ID_FIELD}),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "start_factory_reset", handle_start_factory_reset,
         schema=vol.Schema({vol.Optional("device_id"): cv.string, **_ENTRY_ID_FIELD}),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "wizard_advance", handle_wizard_advance,
         schema=WIZARD_CONTEXT_SCHEMA,
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "wizard_abort", handle_wizard_abort,
         schema=vol.Schema({**_ENTRY_ID_FIELD}),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "confirm_key_saved", handle_confirm_key_saved,
         schema=vol.Schema({**_ENTRY_ID_FIELD}),
     )
@@ -2080,16 +2235,26 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         else:
             entry_id, entry_data = _resolve_target_entry_data(hass, call)
         force_rebuild = bool(call.data.get("force_rebuild", False))
+        credential_rotation = bool(call.data.get("credential_rotation", False))
 
-        # fix/#128: Guard — local/manual build entries do not use the proxy build path.
-        # Entries created via adopt_direct or local_esphome have CONF_BUILD_BACKEND=manual
-        # and must not attempt a proxy build. Raise clearly before any pipeline setup.
-        _backend_mode = entry_data.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND)
-        if _backend_mode in (BUILD_BACKEND_MANUAL, BUILD_BACKEND_ESPHOME_DASHBOARD):
-            raise HomeAssistantError(
-                "This device uses a local build path. Build firmware with ESPHome, "
-                "then register or update the device in PVAutonomy."
-            )
+        # PD-15/WP3A-2: service-level authorization, DEFAULT-DENY.
+        #
+        # Replaces the fix/#128 block list, which was inert twice over: it read
+        # CONF_BUILD_BACKEND from the OUTER runtime slot (where the key never
+        # exists) and therefore always fell back to DEFAULT_BUILD_BACKEND, and
+        # it only denied a named pair of backends, so every other value —
+        # including that fallback — passed. The result was that no entry was
+        # ever stopped here and a stored pva_ Build-Key stayed consumable.
+        #
+        # The rule is now positive and conjunctive: a supported backend AND an
+        # explicit internal staging enablement. See _authorize_build_firmware.
+        #
+        # Placement is load-bearing: this runs after read-only entry resolution
+        # and before the envelope/keyring preflight below, the operation
+        # runner/tracker, the progress bridge, YAML generation, backend
+        # construction and any proxy traffic. A rejected call must leave no
+        # build-side effect behind.
+        _authorize_build_firmware(entry_data)
 
         # fix/#120: preflight COMPILE_SECRET_KEY before the operation starts so
         # the status sensor never transitions to op_state=running for a pure
@@ -2166,6 +2331,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 entry_data=entry_data,
                 device_name=device_name,
                 force_rebuild=force_rebuild,
+                credential_rotation=credential_rotation,
             )
         finally:
             unsub()
@@ -2180,7 +2346,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info(
             "build_firmware service done (entry=%s): build_id=%s, "
             "target_device=%s, cache_hit=%s, firmware_size=%s, backend=%s, "
-            "force_rebuild=%s",
+            "force_rebuild=%s, credential_rotation=%s",
             entry_id[:8] if entry_id else "",
             meta.get("build_id"),
             meta.get("target_device"),
@@ -2188,13 +2354,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             meta.get("firmware_size"),
             meta.get("build_backend"),
             meta.get("force_rebuild"),
+            meta.get("credential_rotation"),
         )
 
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "build_firmware", handle_build_firmware,
         schema=vol.Schema({
             vol.Optional("device_name"): cv.string,
             vol.Optional("force_rebuild"): cv.boolean,
+            vol.Optional("credential_rotation"): cv.boolean,
             **_ENTRY_ID_FIELD,
         }),
     )
@@ -2226,6 +2394,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         else:
             entry_id, entry_data = _resolve_target_entry_data(hass, call)
         confirmed = bool(call.data.get("confirmed", False))
+        credential_rotation = bool(call.data.get("credential_rotation", False))
 
         operation_runner = entry_data["operation_runner"]
         operation_tracker = entry_data["operation_tracker"]
@@ -2265,6 +2434,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 entry_data=entry_data,
                 device_name=device_name,
                 confirmed=confirmed,
+                credential_rotation=credential_rotation,
             )
         finally:
             unsub()
@@ -2292,7 +2462,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # entities appear, stale ones drop out). Rebuild the customer dashboard
         # automatically so the change is visible WITHOUT a manual refresh —
         # closing the proof/staging gap recorded in
-        # docs/CUSTOMER-PATH-VALIDATION.md (Developer-Tools install + manual
+        # docs/managed/CUSTOMER-PATH-VALIDATION.md (Developer-Tools install + manual
         # refresh is staging-only; the supported customer path must surface the
         # result by itself). Reuses the existing idempotent
         # refresh_customer_dashboard service rather than re-implementing the
@@ -2325,11 +2495,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 exc,
             )
 
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "install_prepared_firmware", handle_install_prepared_firmware,
         schema=vol.Schema({
             vol.Optional("device_name"): cv.string,
             vol.Required("confirmed"): cv.boolean,
+            vol.Optional("credential_rotation"): cv.boolean,
             **_ENTRY_ID_FIELD,
         }),
     )
@@ -2410,21 +2581,28 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         return {"present": present, "fingerprint": fingerprint}
 
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "set_compile_secret_key", handle_set_compile_secret_key,
         schema=vol.Schema({
             vol.Required("entry_id"): cv.string,
             vol.Required("compile_secret_key"): cv.string,
         }),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "clear_compile_secret_key", handle_clear_compile_secret_key,
         schema=vol.Schema({vol.Required("entry_id"): cv.string}),
     )
-    hass.services.async_register(
+    _register_managed(
         DOMAIN, "compile_secret_key_status", handle_compile_secret_key_status,
         schema=vol.Schema({vol.Required("entry_id"): cv.string}),
         supports_response=_SupportsResponse.ONLY,
     )
 
-    _LOGGER.info("Registered %d services for %s (domain-scope, P1-06)", len(_SERVICE_NAMES), DOMAIN)
+    registered = [
+        name for name in _SERVICE_NAMES
+        if managed or name not in _MANAGED_SERVICE_NAMES
+    ]
+    _LOGGER.info(
+        "Registered %d services for %s (domain-scope, P1-06; managed paths %s)",
+        len(registered), DOMAIN, "enabled" if managed else "disabled",
+    )

@@ -28,7 +28,9 @@ practical post-upload reload).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,7 @@ from .flash_uploader import (
     ota_upload_with_retry,
     resolve_device_ip,
 )
+from .log_safety import safe_exc_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +65,7 @@ _ARTIFACT_FILENAME = "firmware.ota.bin"
 # refuse to flash anything smaller than this so a truncated/empty file
 # never reaches the device.
 _MIN_ARTIFACT_BYTES = 300 * 1024
+_ROTATION_REBOOT_DELAY_S = 15.0
 
 
 def _artifact_path_for(device_id: str) -> Path:
@@ -76,6 +80,7 @@ async def async_install_prepared_firmware_for_device(
     entry_data: dict[str, Any],
     device_name: str | None = None,
     confirmed: bool = False,
+    credential_rotation: bool = False,
 ) -> dict[str, Any]:
     """Install the prepared firmware artifact for one device via OTA.
 
@@ -89,11 +94,15 @@ async def async_install_prepared_firmware_for_device(
             device is used; otherwise the call fails closed.
         confirmed: Must be ``True``. The service refuses to flash without
             explicit confirmation.
+        credential_rotation: Require a prepared rotation artifact, upload it
+            with the still-active OTA password, then promote the pending pair
+            and reauthenticate the ESPHome integration with the new API key.
 
     Returns:
         Safe install metadata (no secret values):
         ``target_device``, ``artifact_path``, ``firmware_size``,
-        ``device_ip``, ``ip_method``, ``ota_password_scope``.
+        ``device_ip``, ``ip_method``, ``ota_password_scope``,
+        ``credential_rotation``, ``credential_handover``.
 
     Raises:
         HomeAssistantError (fail-closed) on: missing confirmation, missing
@@ -200,6 +209,34 @@ async def async_install_prepared_firmware_for_device(
             f"{_MIN_ARTIFACT_BYTES} bytes). Bitte neu vorbereiten und "
             "erneut versuchen."
         )
+
+    rotation_context = None
+    if credential_rotation:
+        if not mac_suffix:
+            raise HomeAssistantError(
+                f"{_SERVICE}: credential rotation requires a verified device "
+                "MAC suffix"
+            )
+        from .credential_rotation import (
+            CredentialRotationError,
+            validate_rotation_artifact_sync,
+        )
+
+        try:
+            rotation_context = await hass.async_add_executor_job(
+                partial(
+                    validate_rotation_artifact_sync,
+                    hass.config.config_dir,
+                    artifact_path,
+                    target_device=target_device,
+                    mac_suffix=mac_suffix,
+                )
+            )
+        except CredentialRotationError as exc:
+            raise HomeAssistantError(
+                f"{_SERVICE}: credential rotation preflight failed for "
+                f"{target_device}: {exc}"
+            ) from exc
 
     _emit_install_stage(
         hass,
@@ -335,6 +372,138 @@ async def async_install_prepared_firmware_for_device(
             "Bitte später erneut versuchen oder Support kontaktieren."
         ) from exc
 
+    credential_handover = "not_requested"
+    if rotation_context is not None:
+        from .credential_rotation import (
+            CredentialRotationError,
+            finalize_device_rotation_sync,
+            invalidate_rotation_marker_sync,
+            promote_device_rotation_sync,
+        )
+        from .keyring import apply_noise_psk_for_mac_suffix
+
+        _emit_install_stage(
+            hass,
+            entry_id=entry_id,
+            stage="credential_promote",
+            progress=92,
+            target_device=target_device,
+            artifact_path=artifact_path,
+            firmware_size=firmware_size,
+            device_ip=device_ip,
+        )
+        try:
+            await hass.async_add_executor_job(
+                promote_device_rotation_sync,
+                hass.config.config_dir,
+                rotation_context.mac_suffix,
+            )
+        except CredentialRotationError as exc:
+            _emit_install_stage(
+                hass,
+                entry_id=entry_id,
+                stage="credential_promote_failed",
+                progress=92,
+                target_device=target_device,
+                artifact_path=artifact_path,
+                firmware_size=firmware_size,
+                device_ip=device_ip,
+                error=str(exc),
+            )
+            raise HomeAssistantError(
+                f"{_SERVICE}: firmware upload succeeded for {target_device}, "
+                f"but credential promotion failed: {exc}. The device may "
+                "already require the pending credentials."
+            ) from exc
+
+        # Persist the promoted PSK in the integration keyring before reauth.
+        # If reauth fails transiently, both the canonical secret and keyring
+        # still contain the new value, while previous values remain retained.
+        keyring = entry_data.get("keyring")
+        keyring_persisted = keyring is None
+        if keyring is not None:
+            try:
+                await keyring.set_production_noise_psk(
+                    rotation_context.mac_suffix, rotation_context.new_api_key
+                )
+                keyring_persisted = True
+            except Exception as exc:  # noqa: BLE001 — reauth must still be attempted
+                _LOGGER.warning(
+                    "%s: promoted API key could not be persisted in keyring "
+                    "(%s); continuing with ESPHome reauthentication before retry",
+                    _SERVICE,
+                    safe_exc_text(exc),
+                )
+
+        _emit_install_stage(
+            hass,
+            entry_id=entry_id,
+            stage="credential_reauth",
+            progress=95,
+            target_device=target_device,
+            artifact_path=artifact_path,
+            firmware_size=firmware_size,
+            device_ip=device_ip,
+        )
+        await asyncio.sleep(_ROTATION_REBOOT_DELAY_S)
+        applied = await apply_noise_psk_for_mac_suffix(
+            hass,
+            rotation_context.new_api_key,
+            rotation_context.mac_suffix,
+            ha_device_id=ha_device_id or "",
+            device_names=[target_device],
+        )
+        if not applied:
+            _emit_install_stage(
+                hass,
+                entry_id=entry_id,
+                stage="credential_reauth_failed",
+                progress=95,
+                target_device=target_device,
+                artifact_path=artifact_path,
+                firmware_size=firmware_size,
+                device_ip=device_ip,
+                error="ESPHome reauthentication with promoted API key failed",
+            )
+            raise HomeAssistantError(
+                f"{_SERVICE}: firmware upload and credential promotion "
+                f"succeeded for {target_device}, but ESPHome reauthentication "
+                "failed. Pending and previous credentials were retained for "
+                "recovery; retry install_prepared_firmware with confirmed=true "
+                "and credential_rotation=true for this device."
+            )
+
+        # A keyring storage failure must not prevent the first reauth attempt,
+        # but cleanup may proceed only once persistence is confirmed.
+        if keyring is not None and not keyring_persisted:
+            try:
+                await keyring.set_production_noise_psk(
+                    rotation_context.mac_suffix, rotation_context.new_api_key
+                )
+                keyring_persisted = True
+            except Exception as exc:  # noqa: BLE001 — surface recovery state
+                raise HomeAssistantError(
+                    f"{_SERVICE}: device {target_device} reconnected with the "
+                    "new API key, but keyring persistence failed. Pending and "
+                    "previous credentials were retained for recovery."
+                ) from exc
+
+        try:
+            await hass.async_add_executor_job(
+                finalize_device_rotation_sync,
+                hass.config.config_dir,
+                rotation_context.mac_suffix,
+            )
+            await hass.async_add_executor_job(
+                invalidate_rotation_marker_sync, artifact_path
+            )
+        except CredentialRotationError as exc:
+            raise HomeAssistantError(
+                f"{_SERVICE}: device {target_device} reconnected with the new "
+                f"credentials, but rotation cleanup failed: {exc}"
+            ) from exc
+        credential_handover = "complete"
+
     _emit_install_stage(
         hass,
         entry_id=entry_id,
@@ -349,7 +518,7 @@ async def async_install_prepared_firmware_for_device(
     # ── Stage 5: practical reconnect (fire-and-forget reload) ───────────
     try:
         mac = mac_suffix
-        if mac:
+        if mac and rotation_context is None:
             from .keyring import schedule_post_flash_reload
             hass.async_create_task(schedule_post_flash_reload(hass, mac))
     except Exception:  # pragma: no cover - defensive
@@ -385,6 +554,8 @@ async def async_install_prepared_firmware_for_device(
         "device_ip": device_ip,
         "ip_method": ip_method,
         "ota_password_scope": ota_password_scope,
+        "credential_rotation": credential_rotation,
+        "credential_handover": credential_handover,
     }
 
 

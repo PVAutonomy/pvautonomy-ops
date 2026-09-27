@@ -26,6 +26,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .device_id import build_device_manifest_url
+from .log_safety import safe_exc_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -215,24 +216,32 @@ def _run_publish_script(
 
     _LOGGER.info("Running publish script: %s", " ".join(cmd))
     try:
+        # The script is not in this repository, so its output is not evidenced
+        # to be free of credential material. Capture bytes, not text: nothing
+        # is decoded, and only the sizes reach the log.
         proc = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
             timeout=120,
         )
         if proc.returncode != 0:
             _LOGGER.error(
-                "Publish script failed (rc=%d): %s",
+                "Publish script failed (rc=%d, stdout %d bytes, stderr %d bytes)",
                 proc.returncode,
-                proc.stderr or proc.stdout,
+                len(proc.stdout),
+                len(proc.stderr),
             )
             return False
-        _LOGGER.info("Publish script output: %s", proc.stdout[-500:])
+        _LOGGER.info(
+            "Publish script succeeded (rc=%d, stdout %d bytes, stderr %d bytes)",
+            proc.returncode,
+            len(proc.stdout),
+            len(proc.stderr),
+        )
         return True
     except subprocess.TimeoutExpired:
         _LOGGER.error("Publish script timed out")
         return False
     except Exception as exc:
-        _LOGGER.exception("Publish script error: %s", exc)
+        _LOGGER.error("Publish script error: %s", safe_exc_text(exc))
         return False

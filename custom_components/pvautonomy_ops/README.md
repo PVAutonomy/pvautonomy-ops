@@ -1,60 +1,89 @@
 # PVAutonomy
 
-Manage Edge101 ESPHome devices for solar inverter monitoring in Home Assistant.
+A Home Assistant integration for a DFRobot Edge101 controller (DFR0886) that
+reads and controls a Growatt inverter (SPH10K or MIC600) over RS485/Modbus.
 
-## Features
+This release is a **Community Alpha**: experimental, for technically capable
+Home Assistant users, without warranty or support commitment. It does not
+build or install firmware for you: the setup generates the ESPHome device
+configuration, you build and flash it with ESPHome, and the setup then adopts
+the running controller. What the project does and does not claim, and how to
+report a security issue, is stated in the
+[README](https://github.com/PVAutonomy/pvautonomy-ops) and the
+[security policy](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md)
+of the distribution repository.
 
-- **Device Discovery** — automatically finds Edge101 devices via the HA Device Registry
-- **Remote Firmware Builds** — compile production firmware in the cloud via GitHub Actions
-- **OTA Flash** — update device firmware over-the-air with integrity verification (SHA-256)
-- **Readiness Gates** — validate device health, entity naming, and configuration before flashing
-- **Multi-device Support** — manage multiple Edge101 devices from a single integration
+## What it offers
 
-## Quick Start
+- **Setup** (Settings → Devices & Services → Add Integration → PVAutonomy)
+  with two entries:
+  - *Set up a new controller* — generates the ESPHome device configuration in
+    `/config/esphome/` and the four entries it needs in your ESPHome
+    `secrets.yaml`;
+  - *Adopt a running controller* — registers a controller that already runs
+    the generated firmware. Nothing is built, installed or reflashed.
+- **Options** of a controller: *Settings* (active device, poll interval),
+  *System Dashboard* (remove it or bring it back), *Relocate Device*, and
+  *Clean Up Old Entities*.
+- **Grid Power** (optional), in the options of the *PVAutonomy Installation*
+  entry: map a grid power sensor or a detected SHRDZM smart meter.
+- **Dashboards**: a device dashboard per controller, created at adoption, and
+  the System Dashboard (**PVAutonomy** in the sidebar) with a *Maintenance*
+  view to refresh a device dashboard and a *Help* view.
+- **Services**: `pvautonomy_ops.apply_noise_psk`,
+  `pvautonomy_ops.set_selected_device`,
+  `pvautonomy_ops.refresh_customer_dashboard` and
+  `pvautonomy_ops.activate_grid_first_draft`.
 
-1. Install via HACS (custom repository: `PVAutonomy/pvautonomy-ops`)
-2. Add the integration: Settings > Devices & Services > Add > PVAutonomy
-3. Configure: set build backend to `proxy_remote`, enter your API key
-4. Select a device and trigger your first build
+## Quick start
 
-See [Installation](docs/INSTALLATION.md) for detailed steps.
+1. Install the integration through HACS as a custom repository
+   (`https://github.com/PVAutonomy/pvautonomy-ops`, type *Integration*) or
+   by hand, then restart Home Assistant —
+   [docs/INSTALLATION.md](docs/INSTALLATION.md).
+2. Add the integration and choose **Set up a new controller**.
+3. Build and flash the firmware yourself with ESPHome 2026.8.0 or newer —
+   [docs/LOCAL-ESPHOME-SELF-BUILD.md](docs/LOCAL-ESPHOME-SELF-BUILD.md).
+4. Add the integration again and choose **Adopt a running controller**.
 
 ## Documentation
 
-- [Installation](docs/INSTALLATION.md) — install and add the integration
-- [Setup Guide](docs/SETUP-WIZARD.md) — configure the build backend and options
-- [Troubleshooting](docs/TROUBLESHOOTING.md) — error reference and common fixes
-- [Security & Privacy](docs/SECURITY.md) — what data is sent, integrity checks
-- [FAQ](docs/FAQ.md) — frequently asked questions
+- [Installation](docs/INSTALLATION.md) — requirements, install, update, uninstall
+- [Setup wizard](docs/SETUP-WIZARD.md) — the setup, screen by screen
+- [Local ESPHome self-build](docs/LOCAL-ESPHOME-SELF-BUILD.md) — building and flashing the firmware
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — messages you may see, and what to do
+- [FAQ](docs/FAQ.md)
 
-## Entity Naming Convention (Ops Contract v1, Section 1.4)
+## Entity naming
 
-ESPHome production firmware uses `esphome.name` as the **node name** (e.g., `mic600-garage-01`).
-HA converts dashes to underscores for entity IDs.
+The setup derives the controller's ESPHome node name from model, site and
+device number, for example `mic600-garage-01`, and sets `esphome.friendly_name`
+from it (`Mic600 Garage 01`). Home Assistant builds the prefix of every entity
+ID from the friendly name, so the entities of that controller are named:
 
-**Pattern:** `{domain}.{device_name}_{metric}_device`
+**Pattern:** `{domain}.{node_name with underscores}_{metric}_device`
 
-| ESPHome node name | HA entity_id example |
-|-------------------|---------------------|
+| ESPHome node name | Home Assistant entity ID example |
+|-------------------|----------------------------------|
 | `mic600-garage-01` | `sensor.mic600_garage_01_energy_today_device` |
-| `sph10k-haus-05` | `sensor.sph10k_haus_05_battery_soc_device` |
+| `sph10k-home-05` | `sensor.sph10k_home_05_battery_soc_device` |
 
-**Rules:**
-- Modbus sensor/number/switch entities include `_device` suffix (set in ESPHome YAML `name:` field)
-- System entities (Uptime, WiFi Signal, IP) do NOT have `_device` suffix
-- `esphome.project.name: PVAutonomy.Edge101` is required for discovery (sets `manufacturer=PVAutonomy`, `model=Edge101`)
-- Changing `esphome.name` after first HA registration requires entity registry cleanup (HA preserves original entity_ids)
-
-**Diagnostic:** If entity IDs show an old prefix (e.g., `growatt_mic600tl_x_*`), the device was registered under a previous firmware name. Fix: remove stale entity registry entries + restart HA.
-
-## Compatibility
-
-| Component | Version |
-|-----------|---------|
-| Home Assistant | >= 2024.1.0 |
-| PVAutonomy Ops | 0.2.0 |
-| Ops Contract | v1.0.0 |
+- Modbus sensor, number and switch entities carry the `_device` suffix, set in
+  the entity `name:` of the generated YAML.
+- System entities such as uptime, Wi-Fi signal and IP address have no
+  `_device` suffix.
+- `esphome.project.name: PVAutonomy.Edge101` is required: the integration
+  finds its controllers by it.
+- The PVAutonomy dashboards address entities by this prefix. Do not change
+  `esphome.name` or `esphome.friendly_name` of a generated configuration;
+  changing them after the first registration also leaves the old entity IDs
+  in Home Assistant's entity registry. *Clean Up Old Entities* in the options
+  finds this controller's entities whose ID ends in `_device` and whose
+  prefix, up to the two-digit device number, differs from the current one,
+  and can disable or delete them. Old IDs without that pattern it does not
+  recognise.
 
 ## License
 
-Copyright PVAutonomy. All rights reserved.
+See the LICENSE file of the
+[distribution repository](https://github.com/PVAutonomy/pvautonomy-ops).

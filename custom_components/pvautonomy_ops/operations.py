@@ -16,6 +16,8 @@ from typing import Any, Callable, Optional
 
 from homeassistant.core import HomeAssistant
 
+from .log_safety import safe_exc_text
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -329,11 +331,16 @@ class OperationRunner:
             }
             
         except Exception as ex:
-            # Mark failure
-            error_msg = f"{type(ex).__name__}: {str(ex)}"
+            # Mark failure. An allowlisted own message is kept; any other
+            # exception is reduced to its type name (log traceback audit #325).
+            text = safe_exc_text(ex)
+            if text == type(ex).__qualname__:
+                error_msg = text
+            else:
+                error_msg = f"{type(ex).__name__}: {text}"
             self.tracker.complete_operation(success=False, error=error_msg)
             
-            _LOGGER.exception("Operation '%s' failed", operation_name)
+            _LOGGER.error("Operation '%s' failed: %s", operation_name, error_msg)
             
             return {
                 "success": False,

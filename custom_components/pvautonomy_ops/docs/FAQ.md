@@ -1,104 +1,81 @@
-# Frequently Asked Questions
-
-## General
+# Frequently asked questions
 
 ### What is PVAutonomy?
 
-PVAutonomy is a Home Assistant integration for managing Edge101 devices — ESPHome-based bridges that connect solar inverters (Growatt, Huawei, etc.) to Home Assistant via Modbus.
+A Home Assistant integration for a DFRobot Edge101 controller (DFR0886) that
+reads and controls a Growatt inverter over RS485/Modbus. The controller runs
+ESPHome firmware that is generated for your inverter model.
 
-### Do I need a GitHub account?
+### What does "Community Alpha" mean?
 
-No. The PVAutonomy proxy handles all GitHub interaction on your behalf. You only need an API key from your PVAutonomy provider.
+This release is experimental and meant for technically capable Home
+Assistant users. It comes without warranty and without a support
+commitment. What the project does and does not claim is stated in the
+[README](https://github.com/PVAutonomy/pvautonomy-ops) and the
+[security policy](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md).
 
-### What inverters are supported?
+### Which inverters are supported?
 
-Currently supported:
-- Growatt SPH series (SPH10K)
-- Growatt MIC series (MIC600)
+- **Growatt SPH10K** — generated firmware has run on an Edge101 connected to
+  an SPH10K in a bench setup.
+- **Growatt MIC600** — supported by the configuration generator; not yet
+  validated on hardware with this release.
 
-More inverter models are being added to the registry.
+The setup offers no other models.
 
-## Setup
+### Does the integration build or install the firmware?
 
-### Where do I get my API key?
+No. This release does not build or install firmware for you. The setup
+writes the device configuration into `/config/esphome/`, and you build and
+flash it with the ESPHome Device Builder add-on or the ESPHome command-line
+tool. See [LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md).
 
-Your PVAutonomy provider issues the **Managed Build Service API key** (shown as
-`pva_...`) **before** you set up the system. You enter it in the setup wizard
-when adding the PVAutonomy integration.
+### Which ESPHome version do I need?
 
-This key is separate from the `COMPILE_SECRET_KEY` (a different,
-operator-/provider-provisioned secret). Installing the integration — via the
-Installer/Updater add-on or HACS — does **not** by itself produce an API key;
-the provider issues it.
+2026.8.0 or newer. The generated configuration sets this as its minimum, so
+an older ESPHome refuses to compile it.
 
-Without a valid API key the wizard cannot build firmware. Make sure you have
-your key ready before starting the setup.
+### Do I need an account, a key, or a PVAutonomy online service?
 
-### What is the Customer ID?
+No. Nothing in this documentation needs one.
 
-A unique identifier for your installation. **Leave it empty** — it is automatically derived from your Home Assistant installation via the proxy's `/whoami` endpoint. Only set it if your provider explicitly gives you a specific one.
+### Is HACS required?
 
-### Is HACS required for PVAutonomy?
+No. You can install through HACS as a custom repository, or copy the
+integration folder by hand. See [INSTALLATION.md](INSTALLATION.md).
 
-It depends on the path you choose — both are supported and deliver the same
-0.4.16 release artifact:
+### Where are my Wi-Fi password and the device credentials stored?
 
-- **Normal customers:** no — the preferred path is the PVAutonomy
-  Installer/Updater add-on (`stable` channel), which does not use HACS.
-- **Developers / power-users:** HACS (`stable`) is supported, via the custom
-  repository `PVAutonomy/pvautonomy-ops`.
+In your ESPHome `secrets.yaml`, `/config/esphome/secrets.yaml`, on your Home
+Assistant. The setup writes only entries that are missing: your Wi-Fi name
+and password as you typed them, and an API encryption key and an OTA password
+it generates for the controller. It never changes an entry that is already
+there and never writes a value to the log. The device configuration refers
+to these entries with `!secret` and contains no credential value itself.
+Details: [SETUP-WIZARD.md](SETUP-WIZARD.md#what-the-wizard-writes).
 
-(HACS distribution was previously described as planned; it is now live and
-validated.) See [Installation](INSTALLATION.md) for both paths.
+### Can I use more than one controller?
 
-### Can I use multiple Edge101 devices?
+Yes. Give each one a different location or device number during setup. Each
+controller gets its own API key and OTA password; the Wi-Fi entries are
+shared.
 
-Yes. All discovered Edge101 devices appear in the **Active device** dropdown. Select the device you want to manage. You can switch between devices at any time.
+### Can I change the Wi-Fi network later?
 
-## Builds
+Yes, but plan it: the firmware has no fallback access point. Change the
+entries in `secrets.yaml`, rebuild, and install over the network **while the
+controller is still on the old network**; only then switch the network. See
+[LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md#changing-wi-fi-later--plan-it-and-you-will-not-need-usb).
 
-### How long does a firmware build take?
+### Can I edit the generated device configuration?
 
-Typically **8-10 minutes**. The firmware is compiled by GitHub Actions in the cloud. Build progress is shown in the integration status.
+Some parts, yes. The self-build guide lists what is safe to change and what
+breaks the integration's view of the device.
 
-### What ESPHome version is used?
+### Where do I report a problem?
 
-The build workflow pins ESPHome to version **2025.12.0**. This is managed by PVAutonomy and updated as part of workflow maintenance.
-
-### Can I build firmware locally?
-
-The `proxy_remote` backend builds firmware in the cloud. For local builds, you can switch to the `esphome_dashboard` backend if you have the ESPHome add-on installed, but this is not recommended for production use.
-
-### What happens if a build fails?
-
-Check the error message in the integration logs. Common causes:
-- GitHub Actions runner unavailable (retry after a few minutes)
-- Registry file not found (contact your provider)
-- ESPHome compilation error (contact your provider)
-
-## Security & Privacy
-
-### Is my data private?
-
-Yes. Only build request metadata (device name, inverter model) is sent to the proxy. No credentials, telemetry, or personal data leaves your system. See [Security](SECURITY.md) for details.
-
-### What if my API key is compromised?
-
-Contact your PVAutonomy provider immediately. They can revoke the key and issue a new one.
-
-## Troubleshooting
-
-### The integration shows "degraded" status
-
-This means one or more expected entities are missing. Check:
-- Is your Edge101 device online?
-- Are ESPHome entities visible in Home Assistant?
-- Check the `last_error` attribute on `sensor.pvautonomy_ops_status` for details.
-
-### I see raw key names in the Options dialog
-
-*(Historical — affects only very old builds.)* Update to the current version of
-PVAutonomy. Translation files were completed in v0.2.0+ to include all option
-labels; current releases (0.4.x) are unaffected.
-
-For more issues, see [Troubleshooting](TROUBLESHOOTING.md).
+In the [issue tracker](https://github.com/PVAutonomy/pvautonomy-ops/issues).
+Security issues follow the
+[security policy](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md)
+instead. Never post the content of your `secrets.yaml`, an API key or an OTA
+password.

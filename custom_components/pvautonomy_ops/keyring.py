@@ -18,11 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
+
+from .esphome_secrets import SecretsFileUnreadableError, _read_secrets_strict
+from .log_safety import safe_exc_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -246,11 +248,8 @@ def resolve_noise_psk_from_secrets(
 
     for secrets_path in search_paths:
         try:
-            if not secrets_path.exists():
-                continue
-            with open(secrets_path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
-            if data and secret_key in data:
+            data = _read_secrets_strict(secrets_path)
+            if secret_key in data:
                 value = str(data[secret_key])
                 _LOGGER.info(
                     "noise_psk resolved from %s (key=%s, value=%s)",
@@ -259,11 +258,19 @@ def resolve_noise_psk_from_secrets(
                     mask_key(value),
                 )
                 return value
-        except Exception:
+        except SecretsFileUnreadableError as exc:
+            # Fixed reason, no traceback: a parser or decoder error quotes
+            # the file, and this file holds secrets (#317).
             _LOGGER.warning(
-                "Failed to read %s for noise_psk resolution",
-                secrets_path,
-                exc_info=True,
+                "Cannot read %s for noise_psk resolution: %s",
+                secrets_path.name,
+                exc.reason,
+            )
+        except Exception as exc:
+            _LOGGER.warning(
+                "Cannot read %s for noise_psk resolution (%s)",
+                secrets_path.name,
+                type(exc).__name__,
             )
 
     # Migration aid: check if OTHER edge101_api_key_* entries exist
@@ -271,15 +278,17 @@ def resolve_noise_psk_from_secrets(
     other_keys: list[str] = []
     try:
         esp_secrets = config_dir / "esphome" / "secrets.yaml"
-        if esp_secrets.exists():
-            with open(esp_secrets, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh) or {}
-            other_keys = [
-                k for k in data
-                if k.startswith("edge101_api_key_") and k != secret_key
-            ]
-    except Exception:
-        _LOGGER.debug("secrets.yaml sibling-key scan failed", exc_info=True)
+        data = _read_secrets_strict(esp_secrets)
+        other_keys = [
+            k for k in data
+            if k.startswith("edge101_api_key_") and k != secret_key
+        ]
+    except SecretsFileUnreadableError as exc:
+        _LOGGER.debug("secrets.yaml sibling-key scan skipped: %s", exc.reason)
+    except Exception as exc:
+        _LOGGER.debug(
+            "secrets.yaml sibling-key scan failed (%s)", type(exc).__name__
+        )
 
     if other_keys:
         _LOGGER.warning(
@@ -706,9 +715,10 @@ async def apply_noise_psk_to_esphome_entry(
                 },
                 data=dict(esphome_entry.data),
             )
-        except Exception:
+        except Exception as exc:
             _LOGGER.error(
-                "apply_noise_psk: reauth flow init failed", exc_info=True
+                "apply_noise_psk: reauth flow init failed: %s",
+                safe_exc_text(exc),
             )
             return False
 
@@ -760,9 +770,9 @@ async def apply_noise_psk_to_esphome_entry(
             flow_id,
             user_input={"noise_psk": noise_psk},
         )
-    except Exception:
+    except Exception as exc:
         _LOGGER.error(
-            "apply_noise_psk: flow configure failed", exc_info=True
+            "apply_noise_psk: flow configure failed: %s", safe_exc_text(exc)
         )
         return False
 
@@ -810,6 +820,57 @@ async def apply_noise_psk_to_esphome_entry(
         reason,
     )
     return False
+
+
+async def apply_noise_psk_for_mac_suffix(
+    hass: HomeAssistant,
+    noise_psk: str,
+    mac_suffix: str,
+    *,
+    ha_device_id: str = "",
+    device_names: list[str] | None = None,
+) -> bool:
+    """Apply a new Noise PSK using a stable physical-device identity.
+
+    Credential rotation starts after an OTA reboot, when the ESPHome entry may
+    already be unavailable because it still has the old PSK. Resolve the full
+    MAC and Home Assistant device id from the registry without requiring a
+    live connection, then delegate to the canonical reauth flow.
+    """
+    from .mac_utils import canonical_mac_last6
+
+    suffix = canonical_mac_last6(mac_suffix)
+    full_mac = ""
+    resolved_ha_device_id = ha_device_id
+    resolved_names = list(device_names or [])
+    dev_reg = dr.async_get(hass)
+    for device_entry in dev_reg.devices.values():
+        matches_suffix = any(
+            conn_type == dr.CONNECTION_NETWORK_MAC
+            and conn_id.lower().replace(":", "").replace("-", "").endswith(suffix)
+            for conn_type, conn_id in device_entry.connections
+        )
+        matches_id = bool(
+            resolved_ha_device_id and device_entry.id == resolved_ha_device_id
+        )
+        if not matches_suffix and not matches_id:
+            continue
+        resolved_ha_device_id = device_entry.id
+        if device_entry.name and device_entry.name not in resolved_names:
+            resolved_names.append(device_entry.name)
+        for conn_type, conn_id in device_entry.connections:
+            if conn_type == dr.CONNECTION_NETWORK_MAC:
+                full_mac = conn_id
+                break
+        break
+
+    return await apply_noise_psk_to_esphome_entry(
+        hass,
+        noise_psk,
+        device_mac=full_mac,
+        ha_device_id=resolved_ha_device_id,
+        device_names=resolved_names or None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -969,13 +1030,13 @@ async def update_esphome_entry_for_relocate(
             "Relocate continuity: ESPHome entry reloaded for '%s'",
             new_node_name,
         )
-    except Exception:
+    except Exception as exc:
         _LOGGER.error(
-            "Relocate continuity FAILED: reload raised for entry=%s — "
+            "Relocate continuity FAILED: reload raised %s for entry=%s — "
             "cannot confirm ESPHome accepted the update. "
             "Relocate must not proceed.",
+            safe_exc_text(exc),
             esphome_entry.entry_id[:8],
-            exc_info=True,
         )
         return False
 
@@ -1048,11 +1109,11 @@ async def reload_esphome_entry_for_device(
             entry.entry_id[:8],
         )
         return True
-    except Exception:
+    except Exception as exc:
         _LOGGER.warning(
-            "post_flash_reload: reload failed for entry=%s",
+            "post_flash_reload: reload failed for entry=%s: %s",
             entry.entry_id[:8],
-            exc_info=True,
+            safe_exc_text(exc),
         )
         return False
 

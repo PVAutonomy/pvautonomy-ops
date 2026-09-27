@@ -5,6 +5,8 @@ CI: verified by .github/workflows/ci-ops.yml
 All entity IDs defined here - NO hardcodes elsewhere.
 """
 
+from typing import Final
+
 # Integration metadata
 DOMAIN = "pvautonomy_ops"
 VERSION = "0.4.33"
@@ -12,6 +14,21 @@ CONTRACT_VERSION = "v1.0.0"
 
 # Update interval (seconds)
 UPDATE_INTERVAL = 60
+
+# PD-16 / PD-18: the Community Alpha offers no Managed Build, hosted proxy,
+# Build-Key, Factory Reset or service-driven stepper. While this is False the
+# integration registers none of their services, creates no Flash button,
+# schedules no initial build and shows no firmware buttons on the system
+# dashboard. The backend code stays for the deferred Customer-Ready target.
+# Enabling it changes which release gate applies (CLAUDE.md §1.1, PD-18).
+# Changing this value changes the system dashboard payload: bump
+# dashboard_builder.MANAGED_SCHEMA_VERSION with it.
+MANAGED_PATHS_ENABLED: Final[bool] = False
+
+
+def managed_paths_enabled() -> bool:
+    """Read at call time, so a test patches exactly one symbol."""
+    return MANAGED_PATHS_ENABLED
 
 # ============================================================================
 # Contract Inputs (READ) - Source: ops-contract-v1.md Section 1
@@ -143,6 +160,26 @@ BUILD_BACKEND_CHOICES = [
     BUILD_BACKEND_PROXY_REMOTE,
 ]
 BUILD_BACKEND_DEFAULT = BUILD_BACKEND_SIMULATED  # Safe default until Builder App exists
+
+# ----------------------------------------------------------------------------
+# PD-15/WP3A-2: service-level build authorization — positive allowlist
+# ----------------------------------------------------------------------------
+# The ONLY backends `pvautonomy_ops.build_firmware` may ever run for. This is a
+# positive allowlist, deliberately not a block list: an unknown, empty, missing
+# or future backend value is unauthorized by construction.
+#
+# Membership here is necessary but NOT sufficient — the service additionally
+# requires an explicit internal staging enablement (CONF_STAGING_BUILD_ENABLED).
+# Both predicates are ANDed; neither alone authorizes a build.
+#
+# DEFAULT_BUILD_BACKEND must never be consulted for authorization: it exists to
+# pick a runtime backend, not to grant permission.
+BUILD_FIRMWARE_SUPPORTED_BACKENDS: frozenset[str] = frozenset(
+    {
+        BUILD_BACKEND_PROXY_REMOTE,
+        BUILD_BACKEND_SIMULATED,
+    }
+)
 
 # Hardware platform model (sent to Proxy as "model" field)
 # Distinct from inverter model_slug (mic600/sph10k) which selects registry/YAML.
@@ -499,6 +536,45 @@ MODBUS_VERSION_UNKNOWN: None = None
 
 CONF_ENVELOPE_MODE_ENABLED = "envelope_mode_enabled"
 DEFAULT_ENVELOPE_MODE_ENABLED = True
+
+# ============================================================================
+# Internal staging enablement for the dormant hosted build (PD-15/WP3A-2)
+# ============================================================================
+# Mirror of the CONF_ENVELOPE_MODE_ENABLED pattern with the OPPOSITE polarity.
+# CONF_ENVELOPE_MODE_ENABLED is a killswitch and defaults ON; this is an
+# *enabler* for a dormant path and therefore defaults OFF.
+#
+# `pvautonomy_ops.build_firmware` is default-deny: it runs only when a supported
+# backend (BUILD_FIRMWARE_SUPPORTED_BACKENDS) is persisted AND this flag is
+# explicitly true in the entry's runtime configuration. Its purpose is to keep
+# the dormant hosted build reachable on operator staging hosts without offering
+# it anywhere in the customer product.
+#
+# Not exposed in any config-flow, options-flow or repair schema, and never
+# defaulted to a truthy value. Resolution uses a STRICT truthy parser — see
+# `__init__.py::_staging_build_truthy`; `pipeline._flag_enabled` must NOT be
+# reused here, its permissive polarity belongs to a killswitch and would let a
+# typo enable staging.
+CONF_STAGING_BUILD_ENABLED = "staging_build_enabled"
+DEFAULT_STAGING_BUILD_ENABLED = False
+
+# Internal runtime-config key (not a user option, same convention as
+# `_entry_id`): True only when CONF_BUILD_BACKEND is actually persisted in
+# `entry.options`.
+#
+# `entry.data` is explicitly NOT a backend persistence source: no writer in this
+# integration ever stores CONF_BUILD_BACKEND there, and no reader honours it.
+# (The options→data precedence used for CONF_ENVELOPE_MODE_ENABLED and
+# CONF_STAGING_BUILD_ENABLED is an operator storage-edit escape hatch for those
+# flags only.)
+#
+# `get_runtime_config` still materializes DEFAULT_BUILD_BACKEND as the runtime
+# default when nothing is persisted, which makes a defaulted backend
+# indistinguishable from a configured one once materialized. The service
+# authorization must not accept a default, so it consults this flag as well.
+# Value and flag are produced by the SAME options lookup in
+# `get_runtime_config`, so they cannot disagree about which source won.
+BUILD_BACKEND_PERSISTED_KEY = "_build_backend_persisted"
 
 # build_contract value that the GHA decoder requires for envelope mode
 # (per ADR §6.3.1: yaml_authority is the only path that can produce a

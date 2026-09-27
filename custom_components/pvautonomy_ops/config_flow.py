@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import voluptuous as vol
 
@@ -28,8 +28,12 @@ with contextlib.suppress(ImportError):  # pragma: no cover
         SelectSelector,
         SelectSelectorConfig,
         SelectSelectorMode,
+        TextSelector,
+        TextSelectorConfig,
+        TextSelectorType,
     )
 
+from . import const as _const
 from .const import (
     BUILD_BACKEND_MANUAL,
     BUILD_BACKEND_PROXY_REMOTE,
@@ -60,7 +64,6 @@ from .const import (
     CONF_STRICT_GATES,
     CONFIG_ENTRY_VERSION,
     DEFAULT_ARTIFACT_CHANNEL,
-    DEFAULT_BUILD_BACKEND,
     DEFAULT_CACHE_KEEP_BUILDS,
     DEFAULT_OTA_RETRIES,
     DEFAULT_OTA_RETRY_DELAYS,
@@ -74,18 +77,29 @@ from .const import (
     DOMAIN,
     LOCATION_PRESETS,
     MANUFACTURER_MAP,
-    MENU_OPTION_ADOPT_DIRECT,
-    MENU_OPTION_ADVANCED_PROXY,
-    MENU_OPTION_LOCAL_ESPHOME,
-    MENU_OPTION_MANAGED_BUILD,
+    MENU_OPTION_ADOPT_EXISTING,
+    MENU_OPTION_SETUP_NEW,
     MODEL_REGISTRY_MAP,
     SETUP_STATE_ADOPTED,
     TIER_STANDARD,
     TIER_EXTENDED,
+    TIER_ORDER,
     TIER_UNSAFE,
     UNSAFE_CONSENT_PHRASE,
 )
 from .device_id import compute_device_id, compute_node_name
+from .esphome_secrets import (
+    SELFBUILD_WIFI_KEYS,
+    SELFBUILD_WIFI_PASSWORD_NAME,
+    SELFBUILD_WIFI_SSID_NAME,
+    SecretsFileUnreadableError,
+    ensure_selfbuild_secrets_sync,
+    missing_selfbuild_secrets_sync,
+    selfbuild_api_key_name,
+    selfbuild_ota_key_name,
+    wifi_password_error,
+    wifi_ssid_error,
+)
 from .const import GRID_POWER_OPTIONS_KEY
 from .grid_power import (
     GRID_POWER_MANAGER_KEY,
@@ -99,8 +113,44 @@ from .grid_power_shrdzm import (
     count_shrdzm_devices,
     discover_shrdzm_candidates,
 )
+from .log_safety import safe_exc_text
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Checkbox on local_yaml_confirm_existing. Default off, so continuing past a
+# name that already exists is always an act, never an omission (#257).
+CONF_CONFIRM_REBUILD: Final = "confirm_rebuild"
+
+
+def _normalize_node_name(value: str) -> str:
+    """Reduce a name to the shape :func:`compute_node_name` produces.
+
+    Uses that function's own slugification, so the two can never drift:
+    "Sph10K Bench 02", "sph10k_bench_02" and "sph10k-bench-02" all reduce to
+    "sph10k-bench-02". That is what lets a device's display name be compared
+    against a node name at all.
+    """
+    from .device_id import _slugify
+
+    return _slugify(value).replace("_", "-")
+
+
+class LocalYamlTargetExistsError(Exception):
+    """A device YAML for this node name is already in the ESPHome directory.
+
+    Raised instead of overwriting. Since the local self-build path writes
+    straight into ``/config/esphome/``, the file it would replace may be a
+    configuration the user edited by hand, and silently overwriting it would
+    destroy that work. The flow aborts with ``local_yaml_target_exists`` and
+    leaves the existing file untouched.
+    """
+
+    def __init__(self, node_name: str, path: str) -> None:
+        super().__init__(f"{path} already exists")
+        self.node_name = node_name
+        self.path = path
+
 
 # Localized feature-level display labels for customer-facing and legacy tier
 # strings. The wizard intentionally exposes only standard + extended; unsafe
@@ -169,6 +219,65 @@ def get_supported_tiers(registry_file: str) -> list[str]:
     return tiers
 
 
+def get_extended_control_names(
+    registry_file: str, modbus_version: int | None = None
+) -> list[str] | None:
+    """Names of the extended-tier controls the generator emits for a registry.
+
+    #295: the adopt path derives the device's tier from this list. It runs
+    the generator's own register emission (``_add_registers``) for the
+    extended tier, so the tier, version and ``generator_skip`` gates are the
+    generator's, not a copy of them. Kept are the numbers, switches and
+    selects whose registry tier is ``extended`` and that are not disabled by
+    default: a disabled entity carries ``disabled_by`` in HA and is never
+    matched. The names are the ``name:`` values of the generated YAML (e.g.
+    ``export_limit_power_rate_device``), which HA stores as
+    ``RegistryEntry.original_name``.
+
+    Returns ``None`` when the registry cannot be loaded or processed; callers
+    must treat that as "not extended".
+    """
+    from .yaml_generator import _add_registers, _load_registry
+
+    try:
+        registry = _load_registry(registry_file)
+        emitted: dict[str, Any] = {}
+        _add_registers(
+            emitted,
+            registry,
+            selected_tier=TIER_EXTENDED,
+            modbus_version=modbus_version,
+            map_confirmed=True,
+        )
+    except Exception:
+        _LOGGER.debug(
+            "Cannot derive extended controls from registry %s",
+            registry_file,
+            exc_info=True,
+        )
+        return None
+
+    registers = registry.get("registers") or {}
+    names: list[str] = []
+    for platform, bucket in (
+        ("number", "numbers"),
+        ("switch", "switches"),
+        ("select", "selects"),
+    ):
+        tiers = {
+            entry.get("id"): entry.get("tier", TIER_STANDARD)
+            for entry in registers.get(bucket) or []
+            if isinstance(entry, dict)
+        }
+        for node in emitted.get(platform) or []:
+            if node.get("disabled_by_default"):
+                continue
+            if tiers.get(node.get("id")) != TIER_EXTENDED:
+                continue
+            names.append(node["name"])
+    return names
+
+
 # Legacy defaults kept for backward compat (imported by other modules)
 DEFAULT_NAME = "PVAutonomy"
 
@@ -233,10 +342,22 @@ def get_device_slug_from_entry(
 class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Multi-step Config Flow for PVAutonomy Ops.
 
-    Steps:
-        user (menu) → proxy → manufacturer → model → location → target_device →
-          • setup_new:  → summary → build + OTA flash
-          • adopt:      → adopt_confirm (register only, NO build/install/flash)
+    Customer-visible steps:
+        user (menu) →
+          • setup_new: Community Alpha self-build (PD-16) → local_esphome_guide
+            → manufacturer → model → location → [local_wifi_credentials, only
+            when the ESPHome secrets file lacks them] → local_yaml_ready
+            (provisions the four !secret entries, then writes the device YAML
+            at the registry's highest tier; the user compiles and flashes it
+            themselves)
+          • adopt_existing: manufacturer → model → location → target_device →
+            adopt_confirm (register only, NO build/install/flash; the tier is
+            derived from the device's entity surface)
+
+    Dormant Managed/Proxy handlers remain callable by their direct internal
+    step ids for staging and compatibility, but are not advertised by the
+    normal customer menu. The local-YAML handlers are NOT dormant — they are
+    the customer path that setup_new leads to.
     One Config Entry per physical device (unique_id = pvautonomy_ops_{ha_device_id}).
     """
 
@@ -283,10 +404,28 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # selected (not adopt_direct). Both paths share BUILD_SERVICE_LOCAL_ESPHOME
         # but only local_esphome should route location → local_yaml_ready.
         self._local_yaml_mode: bool = False
-        # Build service mode (#128): records which UX path created this entry.
-        # Default = managed (pva_ key + DEFAULT_PROXY_BASE_URL); overridden by
-        # the mode-selector step before any proxy/key collection happens.
-        self._build_service_mode: str = BUILD_SERVICE_MANAGED
+        # Name of an existing device the computed node name collides with,
+        # carried from location into local_yaml_confirm_existing (#257).
+        self._existing_device_label: str = ""
+        # Node name the user confirmed a rebuild for. Bound to that exact
+        # name, so changing site or number does not inherit the decision.
+        self._rebuild_confirmed_slug: str = ""
+        # Self-build secrets (#240). Node name whose four !secret entries
+        # this flow has verified to be in place. Bound to that exact name,
+        # like _rebuild_confirmed_slug above: a flag that only said "done"
+        # would still say it after the user went back and changed the site
+        # or the device number, and the run would then generate a YAML
+        # referencing secrets nobody had provisioned.
+        self._selfbuild_secrets_ready_slug: str = ""
+        # Which of wifi_ssid / wifi_password the file is missing — decides
+        # which fields the credentials step shows. Never holds a value.
+        self._selfbuild_missing_wifi: list[str] = []
+        # Build service mode (#128): records which explicit UX path created
+        # this entry. There is deliberately no implicit Managed default —
+        # normal customer setup (PD-16) selects BUILD_SERVICE_LOCAL_ESPHOME
+        # via setup_new, and the dormant Managed/staging handlers set their
+        # mode before any proxy/key collection happens.
+        self._build_service_mode: str | None = None
         # MAC conflict detection (relocate from existing device)
         from .metadata import DeviceMetadata
 
@@ -306,29 +445,39 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 1: Choose build service mode.
+        """Step 1: Show only the two canonical customer entry points.
 
-        Four paths:
-        - managed_build: PVAutonomy Managed Build Service (pva_ key, wizard builds firmware)
-        - adopt_direct: Register already-running device (no key, no build)
-        - local_esphome: Build firmware yourself (no key, guidance only)
-        - advanced_proxy: Self-hosted / custom proxy (existing proxy step)
+        Both entries are customer paths: setup_new leads to the Community
+        Alpha local-ESPHome self-build (PD-16), adopt_existing registers an
+        already-running device. Managed build and advanced proxy handlers
+        remain implemented for direct internal/staging and compatibility
+        callers and are intentionally absent from this menu; local_esphome
+        needs no separate row because setup_new already leads there.
         """
         return self.async_show_menu(
             step_id="user",
             menu_options=[
-                MENU_OPTION_MANAGED_BUILD,
-                MENU_OPTION_ADOPT_DIRECT,
-                MENU_OPTION_LOCAL_ESPHOME,
-                MENU_OPTION_ADVANCED_PROXY,
+                MENU_OPTION_SETUP_NEW,
+                MENU_OPTION_ADOPT_EXISTING,
             ],
         )
 
     async def async_step_setup_new(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Redirected to managed_build (backward compat for programmatic callers)."""
-        return await self.async_step_managed_build()
+        """Community Alpha entry point (PD-16): local ESPHome self-build.
+
+        The active product scope is the free, local-first Community Alpha:
+        PVAutonomy generates the device YAML, the user builds and flashes the
+        firmware themselves with their own ESPHome credentials, and returns to
+        adopt the running device. Those documented manual steps are the
+        product on this path, not a defect (CLAUDE.md 6.4b).
+
+        This delegates to the existing, unchanged local-ESPHome handler. No
+        Managed Build, no hosted proxy, no Build-Key, and no
+        COMPILE_SECRET_KEY is involved at any point.
+        """
+        return await self.async_step_local_esphome()
 
     async def async_step_adopt_existing(
         self, user_input: dict[str, Any] | None = None
@@ -340,6 +489,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Menu target: PVAutonomy Managed Build Service."""
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         self._adopt_mode = False
         self._build_service_mode = BUILD_SERVICE_MANAGED
         return await self.async_step_managed_key()
@@ -371,6 +523,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Menu target: Self-hosted / custom proxy (advanced)."""
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         self._adopt_mode = False
         self._build_service_mode = BUILD_SERVICE_SELF_HOSTED
         return await self.async_step_proxy()
@@ -383,6 +538,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         proxy_base_url is fixed to DEFAULT_PROXY_BASE_URL and never shown.
         customer_id is auto-derived via /whoami.
         """
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -467,37 +625,367 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({}),
         )
 
-    async def _generate_and_save_local_yaml(self) -> tuple[str, str]:
-        """Generate ESPHome YAML for local self-build and save to config dir.
+    def _generate_and_save_local_yaml_sync(self) -> tuple[str, str, int]:
+        """Synchronous body of :meth:`_generate_and_save_local_yaml`.
 
-        Returns (yaml_path_str, node_name) on success.
-        Raises YamlGenerationError on failure.
-        No managed-service context required — generates !secret placeholders.
+        Runs in the executor. Everything that touches the filesystem lives
+        here — generate_device_yaml() reads the production base template and
+        the inverter registry, and the result is written out — so a single
+        executor hop keeps all of it off the event loop.
+
+        Returns (yaml_path_str, node_name, line_count).
         """
-        from .yaml_generator import YamlGenerationError, generate_device_yaml  # noqa: F401
+        from .yaml_generator import generate_device_yaml
 
         node_name = compute_node_name(self._model_slug, self._site, self._number)
+
+        # Two layers, and they do different jobs. This check is the UX
+        # shortcut: the node name is fully determined by model/site/number, so
+        # a clash can be reported before the generator runs and nothing is
+        # produced for nothing. The guarantee is the "x" mode further down —
+        # see there. A check alone would leave a window between the look and
+        # the write in which another writer could create the file.
+        out_dir = Path(self.hass.config.path("esphome"))
+        out_path = out_dir / f"{node_name}.yaml"
+        if out_path.exists():
+            raise LocalYamlTargetExistsError(node_name, str(out_path))
+
+        # #295 (operator decision 2026-09-09): the self-build ships the highest
+        # tier the chosen registry supports, extended for the SPH10K and
+        # standard for the MIC600. get_supported_tiers() falls back to
+        # standard when the registry cannot be read, so DEFAULT_SELECTED_TIER
+        # stays the floor. It reads the registry from disk, which is why the
+        # choice is made here, inside the one executor hop.
+        supported = get_supported_tiers(self._registry_file)
+        self._selected_tier = max(
+            supported, key=lambda tier: TIER_ORDER.get(tier, 0)
+        )
+
         yaml_content = generate_device_yaml(
             model=self._model_slug,
             site=self._site,
             number=self._number,
             registry_file=self._registry_file,
             mac_suffix=None,
-            selected_tier=TIER_STANDARD,
+            selected_tier=self._selected_tier,
             modbus_version=None,
             map_confirmed=True,
         )
 
-        out_dir = Path(self.hass.config.path("pvautonomy", "generated"))
+        # A host without the ESPHome add-on has no /config/esphome yet.
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{node_name}.yaml"
-        out_path.write_text(yaml_content, encoding="utf-8")
-        _LOGGER.info(
-            "Local ESPHome YAML written: %s (%d lines)",
-            out_path,
-            yaml_content.count("\n"),
+
+        # The guarantee. Mode "x" is O_EXCL: the file is created only if it
+        # does not exist, decided by the filesystem in one operation, so a
+        # file that appeared after the check above is still not overwritten.
+        # Same abort reason either way — the user cannot tell which layer
+        # caught it, and does not need to.
+        try:
+            with open(out_path, "x", encoding="utf-8") as fh:
+                fh.write(yaml_content)
+        except FileExistsError as exc:
+            raise LocalYamlTargetExistsError(node_name, str(out_path)) from exc
+
+        return str(out_path), node_name, yaml_content.count("\n")
+
+    async def _generate_and_save_local_yaml(self) -> tuple[str, str]:
+        """Generate ESPHome YAML for local self-build and save to config dir.
+
+        Writes into ``/config/esphome/`` so the ESPHome Device Builder add-on
+        lists the device without the user copying anything by hand.
+
+        Returns (yaml_path_str, node_name) on success.
+
+        Raises:
+            YamlGenerationError: the device YAML could not be generated.
+            LocalYamlTargetExistsError: a YAML for this node name is already
+                there; it is never overwritten.
+            OSError: the target directory or file could not be written.
+
+        All three are fatal for the caller — see async_step_local_yaml_ready.
+        No managed-service context required — generates !secret placeholders.
+        """
+        yaml_path, node_name, line_count = await self.hass.async_add_executor_job(
+            self._generate_and_save_local_yaml_sync
         )
-        return str(out_path), node_name
+        _LOGGER.info(
+            "Local ESPHome YAML written: %s (%d lines, tier %s)",
+            yaml_path,
+            line_count,
+            self._selected_tier,
+        )
+        return yaml_path, node_name
+
+    def _password_field(self) -> Any:
+        """Return the schema validator for a password input.
+
+        ``homeassistant.helpers.selector`` is imported optionally at module
+        level, so this degrades to a plain string field where it is absent
+        rather than raising. The selector matters: it is what makes the
+        frontend render a masked field instead of showing the passphrase
+        to anyone looking at the screen.
+        """
+        try:
+            return TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            )
+        except NameError:  # pragma: no cover - HA selector helpers absent
+            return str
+
+    def _local_yaml_target_path(self, node_name: str) -> Path:
+        """Where the device YAML for *node_name* would be written."""
+        return Path(self.hass.config.path("esphome")) / f"{node_name}.yaml"
+
+    def _abort_selfbuild_secrets(self, error: str) -> FlowResult:
+        """Abort because the ESPHome secrets file could not be provisioned.
+
+        Fatal, like the YAML write failure it mirrors (CLAUDE.md §6.2 and
+        #256): without the four secrets ESPHome refuses to compile, so
+        continuing to the "ready" screen would report success for work that
+        did not happen. A permissions failure lands here too — a
+        world-readable secrets.yaml we could not tighten is not a warning.
+
+        ``error`` is the provisioner's own message: a path, a reason it
+        composed itself, and at most an ``OSError`` string. It never carries
+        file content, and therefore never a secret.
+        """
+        _LOGGER.error("Self-build ESPHome secrets could not be provisioned: %s", error)
+        return self.async_abort(
+            reason="local_secrets_write_failed",
+            description_placeholders={"error": error},
+        )
+
+    async def _selfbuild_precheck(self, node_name: str) -> FlowResult | None:
+        """Both collision guards, run at the point of execution.
+
+        Returns a ``FlowResult`` the caller must return, or ``None`` when the
+        way is clear. Deliberately re-run by every step that is about to
+        persist something, rather than trusted from whoever routed here — the
+        same shape as the O_EXCL write in #256 and the re-run guard in #261.
+        A step entered directly must be as safe as one reached in order.
+
+        Two different questions:
+
+        * does Home Assistant already know a device of this name — answered by
+          the confirmation screen, because rebuilding is legitimate;
+        * is there already a device YAML on disk for it — answered by
+          aborting, because that file may be one the user edited and it is
+          never overwritten.
+
+        Both run **before** any credential is collected or written. Asking
+        someone for a Wi-Fi passphrase and storing it for a device that is
+        then refused would be work taken under a false premise.
+        """
+        existing = await self._find_existing_device_for_slug(node_name)
+        if existing is not None and self._rebuild_confirmed_slug != node_name:
+            self._existing_device_label = existing
+            return await self.async_step_local_yaml_confirm_existing()
+
+        target = self._local_yaml_target_path(node_name)
+        if await self.hass.async_add_executor_job(target.exists):
+            _LOGGER.error(
+                "Local ESPHome YAML not written for %s: %s already exists",
+                node_name,
+                target,
+            )
+            return self.async_abort(
+                reason="local_yaml_target_exists",
+                description_placeholders={
+                    "node_name": node_name,
+                    "yaml_path": str(target),
+                },
+            )
+        return None
+
+    async def _ensure_selfbuild_secrets(
+        self,
+        node_name: str,
+        wifi_ssid: str | None = None,
+        wifi_password: str | None = None,
+    ) -> str | None:
+        """Provision *node_name*'s four self-build secrets. Returns an error.
+
+        Runs the read-merge-write cycle in one executor hop — the same rule as
+        the YAML write next door (#253): filesystem work never runs on the
+        event loop, and the blocking-call detector that would otherwise fire
+        logs the *arguments* of the call it catches, which here would be the
+        user's Wi-Fi passphrase.
+
+        ``_selfbuild_secrets_ready_slug`` is set to *node_name* only after a
+        **fresh read** of the file reports nothing missing. A ProvisionResult
+        without errors is the provisioner's account of its own work, and what
+        that flag licenses is walking on to generation; those two facts should
+        not be the same fact. It records *which* node name was verified, so it
+        cannot be inherited by a different one.
+
+        Returns ``None`` on success, or a message describing the failure.
+        """
+        result = await self.hass.async_add_executor_job(
+            ensure_selfbuild_secrets_sync,
+            self.hass.config.path(),
+            node_name,
+            wifi_ssid,
+            wifi_password,
+        )
+        if not result.ok:
+            return "; ".join(result.errors)
+
+        if result.created_keys:
+            # Names only. Which secrets were provisioned is useful to see in
+            # the log; their values are not, at any level.
+            _LOGGER.info(
+                "Self-build ESPHome secrets provisioned in %s: %s",
+                result.secrets_file,
+                ", ".join(result.created_keys),
+            )
+
+        try:
+            still_missing = await self.hass.async_add_executor_job(
+                missing_selfbuild_secrets_sync, self.hass.config.path(), node_name
+            )
+        except SecretsFileUnreadableError as exc:
+            return str(exc)
+        if still_missing:
+            return (
+                f"{result.secrets_file} is still missing "
+                f"{', '.join(still_missing)} after provisioning"
+            )
+
+        self._selfbuild_secrets_ready_slug = node_name
+        return None
+
+    async def _selfbuild_secrets_gate(self, node_name: str) -> FlowResult | None:
+        """Make sure *node_name*'s four secrets are in place before generating.
+
+        Returns a ``FlowResult`` the caller must return — a form to fill in, a
+        confirmation to give, or an abort — or ``None`` when the way to the
+        generator is clear.
+
+        Skipped only when **this exact node name** has already been verified
+        in this flow. A boolean would survive the user going back and changing
+        the site or the device number, and the run would then generate a YAML
+        referencing secrets that were provisioned for a different name.
+        """
+        if getattr(self, "_selfbuild_secrets_ready_slug", "") == node_name:
+            return None
+
+        # Both guards again, immediately before anything is written. The name
+        # guard answers the "already known device" question; the disk guard
+        # refuses a node name whose YAML is already there, rather than
+        # collecting credentials for a file that will not be written.
+        blocked = await self._selfbuild_precheck(node_name)
+        if blocked is not None:
+            return blocked
+
+        try:
+            missing = await self.hass.async_add_executor_job(
+                missing_selfbuild_secrets_sync,
+                self.hass.config.path(),
+                node_name,
+            )
+        except SecretsFileUnreadableError as exc:
+            # A secrets.yaml we cannot parse is one we must not append to:
+            # the result would be a file the user still cannot repair.
+            return self._abort_selfbuild_secrets(str(exc))
+
+        if any(name in SELFBUILD_WIFI_KEYS for name in missing):
+            self._selfbuild_missing_wifi = [
+                name for name in missing if name in SELFBUILD_WIFI_KEYS
+            ]
+            return await self.async_step_local_wifi_credentials()
+
+        error = await self._ensure_selfbuild_secrets(node_name)
+        if error is not None:
+            return self._abort_selfbuild_secrets(error)
+        return None
+
+    async def async_step_local_wifi_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ask for the Wi-Fi credentials the generated firmware needs.
+
+        Shown only for the entries ``/config/esphome/secrets.yaml`` does not
+        already have. Nobody can generate an SSID or a passphrase, so these
+        two are the only ones of the four that have to be asked for — and if
+        the file already carries them, this screen never appears at all.
+        They stay generic, not bound to the node name: one Wi-Fi network, one
+        entry, shared by every device on it.
+
+        Both collision guards run here too, on the way in **and** again before
+        anything is persisted, so entering this step directly cannot store a
+        credential for a device the flow would refuse.
+
+        What the user types is stored verbatim — no trimming. A trailing space
+        can be part of an SSID, and a passphrase is whatever they chose within
+        what WPA2 can carry: 8 to 63 printable ASCII characters, and at most
+        32 control-character-free ones for the SSID. Entries outside that are
+        refused as field errors, not trimmed into shape and not dropped in
+        silence. A passphrase this dialog will not take can still be written
+        into ``secrets.yaml`` by hand before the wizard runs — the guide says
+        so, as it does for an open network.
+
+        The values are never echoed back: not into
+        ``description_placeholders``, not into the log, not into a default
+        that would prefill the field on a re-render.
+        """
+        node_name = compute_node_name(
+            self._model_slug, self._site, self._number
+        )
+        blocked = await self._selfbuild_precheck(node_name)
+        if blocked is not None:
+            return blocked
+
+        missing = list(
+            getattr(self, "_selfbuild_missing_wifi", None) or SELFBUILD_WIFI_KEYS
+        )
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            ssid = str(user_input.get(SELFBUILD_WIFI_SSID_NAME) or "")
+            password = str(user_input.get(SELFBUILD_WIFI_PASSWORD_NAME) or "")
+
+            # Judged on the raw entry; the stored value keeps every
+            # character. A passphrase of eight spaces is not a passphrase —
+            # it would be written, read back as present, and then fail the
+            # build with nothing to point at — and neither is one that WPA2
+            # cannot represent. The validators return a translation key and
+            # never anything derived from what was typed.
+            if SELFBUILD_WIFI_SSID_NAME in missing:
+                ssid_error = wifi_ssid_error(ssid)
+                if ssid_error:
+                    errors[SELFBUILD_WIFI_SSID_NAME] = ssid_error
+            if SELFBUILD_WIFI_PASSWORD_NAME in missing:
+                password_error = wifi_password_error(password)
+                if password_error:
+                    errors[SELFBUILD_WIFI_PASSWORD_NAME] = password_error
+
+            if not errors:
+                # Second run, immediately before the write. The first was on
+                # the way in; state can have changed while the form was open.
+                blocked = await self._selfbuild_precheck(node_name)
+                if blocked is not None:
+                    return blocked
+
+                error = await self._ensure_selfbuild_secrets(
+                    node_name, ssid or None, password or None
+                )
+                if error is not None:
+                    return self._abort_selfbuild_secrets(error)
+                return await self.async_step_local_yaml_ready()
+
+        schema: dict[Any, Any] = {}
+        if SELFBUILD_WIFI_SSID_NAME in missing:
+            schema[vol.Required(SELFBUILD_WIFI_SSID_NAME)] = str
+        if SELFBUILD_WIFI_PASSWORD_NAME in missing:
+            schema[vol.Required(SELFBUILD_WIFI_PASSWORD_NAME)] = (
+                self._password_field()
+            )
+
+        return self.async_show_form(
+            step_id="local_wifi_credentials",
+            data_schema=vol.Schema(schema),
+            errors=errors,
+        )
 
     async def async_step_local_yaml_ready(
         self, user_input: dict[str, Any] | None = None
@@ -507,24 +995,97 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Called after model/location are known.
         No Build-Key, no COMPILE_SECRET_KEY, no managed build.
         On submit, aborts with local_yaml_exported — user returns later to adopt.
+
+        Fails **fatally** (CLAUDE.md 6.2). If generation or writing fails there
+        is no file for the user to compile, so the flow aborts with an
+        actionable reason. It must never show the "Device YAML Ready" form —
+        that form states the YAML "was generated and saved", and reaching it
+        after a failure reports success for work that did not happen, then
+        ends in "Local ESPHome YAML exported" on submit.
+
+        Only the three expected failure classes are caught. An unexpected
+        exception is a bug in this integration and must surface as one rather
+        than be disguised as a user-facing error the user cannot act on.
         """
+        from .yaml_generator import YamlGenerationError
+
         if user_input is not None:
             return self.async_abort(reason="local_yaml_exported")
 
-        yaml_path = ""
         node_name = compute_node_name(self._model_slug, self._site, self._number)
+
+        # Same shape as the O_EXCL write in #256: the question the location
+        # step asks is the convenience, this is the point of execution. A
+        # check made somewhere upstream is not a guarantee — anything that
+        # arrives here without a confirmation bound to *this* node name goes
+        # back to the question rather than into the generator.
+        existing = await self._find_existing_device_for_slug(node_name)
+        if existing is not None and self._rebuild_confirmed_slug != node_name:
+            self._existing_device_label = existing
+            return await self.async_step_local_yaml_confirm_existing()
+
+        # The four !secret names the generated YAML references have to be in
+        # /config/esphome/secrets.yaml or ESPHome refuses to compile. Two are
+        # bound to this node name, so two self-built devices never share a
+        # key; the two Wi-Fi entries stay site-wide. Until #240 the wizard's
+        # answer was a screen telling the user to add all four by hand; now
+        # it generates the two it can and asks only for the two it cannot.
+        #
+        # Deliberately *after* the collision guard above: a name clash must
+        # stop the flow before the user is asked to type a Wi-Fi passphrase
+        # for a device that is not going to be generated.
+        blocked = await self._selfbuild_secrets_gate(node_name)
+        if blocked is not None:
+            return blocked
+
         try:
             yaml_path, node_name = await self._generate_and_save_local_yaml()
-        except Exception as exc:
-            _LOGGER.error("Local YAML generation failed: %s", exc)
-            yaml_path = ""
+        except YamlGenerationError as exc:
+            _LOGGER.error(
+                "Local ESPHome YAML generation failed for %s: %s", node_name, exc
+            )
+            return self.async_abort(
+                reason="local_yaml_generation_failed",
+                description_placeholders={
+                    "node_name": node_name,
+                    "error": str(exc),
+                },
+            )
+        except LocalYamlTargetExistsError as exc:
+            _LOGGER.error(
+                "Local ESPHome YAML not written for %s: %s already exists",
+                exc.node_name,
+                exc.path,
+            )
+            return self.async_abort(
+                reason="local_yaml_target_exists",
+                description_placeholders={
+                    "node_name": exc.node_name,
+                    "yaml_path": exc.path,
+                },
+            )
+        except OSError as exc:
+            _LOGGER.error(
+                "Local ESPHome YAML could not be written for %s: %s", node_name, exc
+            )
+            return self.async_abort(
+                reason="local_yaml_write_failed",
+                description_placeholders={
+                    "node_name": node_name,
+                    "error": str(exc),
+                },
+            )
 
         return self.async_show_form(
             step_id="local_yaml_ready",
             data_schema=vol.Schema({}),
             description_placeholders={
-                "yaml_path": yaml_path or "(generation failed — check logs)",
+                "yaml_path": yaml_path,
                 "node_name": node_name,
+                # The screen names the two device-bound secrets so the user
+                # can find them in their own file. Names, never values.
+                "api_key_name": selfbuild_api_key_name(node_name),
+                "ota_key_name": selfbuild_ota_key_name(node_name),
             },
         )
 
@@ -532,7 +1093,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Branch after the physical device is bound in ``target_device``.
 
         Adopt mode skips tier selection and the in-wizard build/flash and
-        goes straight to confirmation; normal setup continues to tiering.
+        goes straight to confirmation, where the tier is derived from the
+        running device instead of asked for (#295); normal setup continues
+        to tiering.
         """
         if self._adopt_mode:
             return await self.async_step_adopt_confirm()
@@ -546,6 +1109,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         UX Pack: customer_id is auto-derived via /whoami (hidden from user).
         Error handling differentiates 404/401/5xx for actionable messages.
         """
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -718,6 +1284,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         UX Pack: Dropdown presets for common locations + custom text field.
         """
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             site_preset = user_input.get("site_preset", "custom")
@@ -730,17 +1297,39 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 site = site_preset
 
-            if not site or len(site) < 2:
+            # A filled custom field next to a non-custom preset is a
+            # contradiction. It used to be settled silently in favour of the
+            # radio, which threw away what the user typed without a word and
+            # produced a node name they never asked for (#257). Neither side
+            # is silently preferred now — preferring the text would only swap
+            # one silent decision for another. The user resolves it.
+            if custom_site and site_preset != "custom":
+                errors[CONF_SITE] = "site_conflicts_with_preset"
+                placeholders["preset"] = LOCATION_PRESETS.get(
+                    site_preset, site_preset
+                )
+            elif not site or len(site) < 2:
                 errors[CONF_SITE] = "site_too_short"
             elif number < 1 or number > 10:
                 errors[CONF_NUMBER] = "number_out_of_range"
             else:
                 self._site = site
                 self._number = number
+                # Anything verified for the previous site/number stops being
+                # an answer here. The slug binding already makes a stale value
+                # inapplicable; clearing it means the next step re-reads the
+                # file even when the name happens to be unchanged.
+                self._selfbuild_secrets_ready_slug = ""
                 # LOCAL_ESPHOME mode is shared by local_esphome (YAML export) and
                 # adopt_direct (register running device). Only route to YAML export
                 # when _local_yaml_mode is True (set by local_esphome, not adopt_direct).
                 if getattr(self, "_local_yaml_mode", False):
+                    existing = await self._find_existing_device_for_slug(
+                        compute_node_name(self._model_slug, site, number)
+                    )
+                    if existing is not None:
+                        self._existing_device_label = existing
+                        return await self.async_step_local_yaml_confirm_existing()
                     return await self.async_step_local_yaml_ready()
                 return await self.async_step_target_device()
 
@@ -757,6 +1346,119 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                 }
             ),
+            errors=errors,
+            description_placeholders=placeholders or None,
+        )
+
+    async def _find_existing_device_for_slug(self, slug: str) -> str | None:
+        """Return a display name if this Home Assistant already knows ``slug``.
+
+        Read-only, and deliberately narrow: it answers "is a device of this
+        name already here", not "may we touch it". The adopt path keeps its
+        own, different semantics (re-flash, EPIC-011 slug rules) and is not
+        consulted.
+
+        Looks at the device registry — ESPHome and PVAutonomy devices, by
+        name, by user-given name and by identifier — and at this
+        integration's config entries by their stored device slug.
+
+        Returns the name to show the user, or ``None`` when the name is free.
+        """
+        wanted = _normalize_node_name(slug)
+        if not wanted:
+            return None
+
+        dev_reg = dr.async_get(self.hass)
+        for device_entry in dev_reg.devices.values():
+            domains = set()
+            esphome_names: list[str] = []
+            for entry_id in device_entry.config_entries:
+                entry = self.hass.config_entries.async_get_entry(entry_id)
+                if entry is None:
+                    continue
+                domains.add(entry.domain)
+                if entry.domain == "esphome":
+                    # The ESPHome entry carries the node name itself, and that
+                    # is the authoritative one — _resolve_slug_from_esphome()
+                    # reads the same field. Display names do not survive a
+                    # rename; this does. A device shown as "Workshop inverter"
+                    # can still be sph10k-bench-02 underneath.
+                    esphome_names.append(entry.data.get("device_name") or "")
+            if not domains & {"esphome", DOMAIN}:
+                continue
+
+            names = [
+                device_entry.name_by_user or "",
+                device_entry.name or "",
+            ]
+            names += esphome_names
+            names += [ident for _domain, ident in device_entry.identifiers]
+            for name in names:
+                if name and _normalize_node_name(name) == wanted:
+                    return (
+                        device_entry.name_by_user
+                        or device_entry.name
+                        or slug
+                    )
+
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            stored = get_device_slug_from_entry(entry, self.hass)
+            if stored and _normalize_node_name(stored) == wanted:
+                return entry.title or slug
+
+        return None
+
+    async def async_step_local_yaml_confirm_existing(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm that a rebuild for an already-known device is intended.
+
+        Reached from the self-build path when the computed node name already
+        exists in this Home Assistant — either routed here by the location
+        step, or sent back here by the generation step itself.
+
+        This confirms rather than refuses. Rebuilding for the same device is
+        legitimate — it is how a deliberate re-flash starts, and refusing it
+        would break a documented case. What must not happen *silently* is
+        generating firmware that carries the identity of a device the user
+        did not have in mind (#257). Cancelling is the easy path; continuing
+        is an explicit decision.
+
+        The step re-runs the guard instead of trusting state left behind by
+        whoever routed here, so it is correct when entered directly.
+        """
+        node_name = compute_node_name(
+            self._model_slug, self._site, self._number
+        )
+        errors: dict[str, str] = {}
+
+        existing = await self._find_existing_device_for_slug(node_name)
+        if existing is None:
+            # Nothing collides after all — there is no question to put, and
+            # inventing one would be a screen the user cannot act on.
+            return await self.async_step_local_yaml_ready()
+        self._existing_device_label = existing
+
+        if user_input is not None:
+            if user_input.get(CONF_CONFIRM_REBUILD, False):
+                # Bound to this node name. Changing site or number afterwards
+                # produces a different one, and the confirmation does not
+                # carry over to it.
+                self._rebuild_confirmed_slug = node_name
+                return await self.async_step_local_yaml_ready()
+            errors[CONF_CONFIRM_REBUILD] = "confirm_rebuild_required"
+
+        return self.async_show_form(
+            step_id="local_yaml_confirm_existing",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CONFIRM_REBUILD, default=False): bool,
+                }
+            ),
+            description_placeholders={
+                "node_name": node_name,
+                "device_name": self._existing_device_label or node_name,
+            },
             errors=errors,
         )
 
@@ -1030,10 +1732,11 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         await async_archive_esphome_yaml(
                             self.hass, filename=old_fn, reason="relocate_via_wizard"
                         )
-                    except Exception:
+                    except Exception as exc:
                         _LOGGER.warning(
-                            "Failed to archive old YAML %s (non-fatal)", old_fn,
-                            exc_info=True,
+                            "Failed to archive old YAML %s (non-fatal): %s",
+                            old_fn,
+                            safe_exc_text(exc),
                         )
                 # Update metadata store with new location
                 try:
@@ -1440,6 +2143,68 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         return missing
 
+    async def _derive_adopted_tier(self) -> str:
+        """Derive the adopted device's tier from its live entity surface.
+
+        #295 (operator decision 2026-09-09: extended is what the SPH10K Alpha
+        ships). Adoption asks no tier question, so the tier is read off the
+        device: **extended** exactly when every extended-tier control the
+        generator emits for this registry (:func:`get_extended_control_names`)
+        is present on the device, otherwise **standard**. Presence is matched
+        as in :meth:`_validate_entity_surface`: entity registry,
+        ``original_name``, disabled entries ignored.
+
+        Fail-closed: no bound device, a registry without an extended surface,
+        a registry that cannot be read, or any error → standard.
+        """
+        from homeassistant.helpers import entity_registry as er
+
+        if not self._ha_device_id:
+            _LOGGER.info("Adopt: no bound device, tier %s", TIER_STANDARD)
+            return TIER_STANDARD
+
+        try:
+            extended_names = await self.hass.async_add_executor_job(
+                get_extended_control_names,
+                self._registry_file,
+                self._modbus_version,
+            )
+            if not extended_names:
+                _LOGGER.info(
+                    "Adopt: registry %s has no extended controls, tier %s",
+                    self._registry_file,
+                    TIER_STANDARD,
+                )
+                return TIER_STANDARD
+
+            ent_reg = er.async_get(self.hass)
+            present = {
+                ent.original_name
+                for ent in er.async_entries_for_device(ent_reg, self._ha_device_id)
+                if getattr(ent, "disabled_by", None) is None
+                and getattr(ent, "original_name", None)
+            }
+        except Exception:
+            _LOGGER.warning(
+                "Adopt: cannot derive the tier of device %s, using %s (fail-closed)",
+                self._ha_device_id,
+                TIER_STANDARD,
+                exc_info=True,
+            )
+            return TIER_STANDARD
+
+        missing = [name for name in extended_names if name not in present]
+        tier = TIER_STANDARD if missing else TIER_EXTENDED
+        _LOGGER.info(
+            "Adopt: device %s has %d/%d extended controls, tier %s%s",
+            self._ha_device_id,
+            len(extended_names) - len(missing),
+            len(extended_names),
+            tier,
+            f" (missing: {', '.join(missing[:5])})" if missing else "",
+        )
+        return tier
+
     async def async_step_adopt_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -1450,7 +2215,8 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         ``mac_suffix``) and a build-skipping ``_setup_state = "adopted"``.
         ``async_setup_entry`` seeds the metadata store from ``_initial_device``
         and skips the post-setup background build, so adoption never triggers
-        a build, install, or reflash.
+        a build, install, or reflash. The entry's tier is derived from the
+        device's entity surface (:meth:`_derive_adopted_tier`, #295).
         """
         device_id = compute_device_id(self._model_slug, self._site, self._number)
         device_slug = compute_node_name(
@@ -1513,6 +2279,12 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors={"base": "missing_required_entities"},
                 )
 
+            # #295: the tier is derived from the running device, not assumed.
+            # Deliberately after the surface check: that check keeps its
+            # standard-tier contract (which entities block adoption), and the
+            # derived tier only decides what the entry records.
+            self._selected_tier = await self._derive_adopted_tier()
+
             # UI-001 / #170 F1: adopted (running) devices receive their
             # customer dashboard at commissioning time — same best-effort
             # background task as the build path below. The build path gates
@@ -1540,7 +2312,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         if self._build_service_mode == BUILD_SERVICE_LOCAL_ESPHOME
                         else BUILD_BACKEND_PROXY_REMOTE
                     ),
-                    CONF_BUILD_SERVICE_MODE: self._build_service_mode,
+                    **_mode_option(self._build_service_mode),
                     CONF_ARTIFACT_CHANNEL: DEFAULT_ARTIFACT_CHANNEL,
                     CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT: DEFAULT_PROXY_AUTO_REFRESH,
                     CONF_OTA_RETRIES: DEFAULT_OTA_RETRIES,
@@ -1594,6 +2366,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Show spinner while firmware is being built."""
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         if self._build_task is None:
             # fix/#113/#116/#128: preflight — verify COMPILE_SECRET_KEY before build.
             # Managed mode uses its own abort reason; other modes keep the original.
@@ -1624,15 +2399,17 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._build_result = None
             return self.async_abort(reason="setup_cancelled")
         except Exception as exc:
-            _LOGGER.exception(
+            _LOGGER.error(
                 "Wizard build failed (step=progress_build, model=%s, "
-                "registry=%s, mac=%s, proxy=%s)",
+                "registry=%s, mac=%s, proxy=%s): %s",
                 self._model_slug,
                 self._registry_file,
                 self._mac_suffix,
                 self._proxy_base_url.split("/")[2] if self._proxy_base_url and "/" in self._proxy_base_url else "(none)",
+                safe_exc_text(exc),
             )
-            # Map raw exceptions to user-friendly messages (DE/EN)
+            # Map raw exceptions to user-friendly messages (DE/EN). ``raw`` only
+            # selects a message; text shown to the user is ``safe_exc_text``.
             raw = str(exc)
             # P2-c (ADR-0001): firmware definitions ship WITH the integration —
             # never instruct the customer to provision/check a /config file.
@@ -1674,14 +2451,14 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # lists legacy /config locations); point to update/reinstall.
                 self._flash_error = defs_hint
             elif "not found" in raw.lower():
-                self._flash_error = raw
+                self._flash_error = safe_exc_text(exc)
             elif "Invalid mac_suffix" in raw:
                 self._flash_error = (
-                    f"MAC address error: {raw}\n"
+                    f"MAC address error: {safe_exc_text(exc)}\n"
                     "The device MAC suffix is invalid. Re-discover the device."
                 )
             else:
-                self._flash_error = f"Build failed: {raw}"
+                self._flash_error = f"Build failed: {safe_exc_text(exc)}"
             self._build_task = None
             return self.async_show_progress_done(
                 next_step_id="error_build_failed"
@@ -1777,6 +2554,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Show spinner while firmware is being flashed via OTA."""
+        if not _const.managed_paths_enabled():
+            # PD-16 / PD-18 (A-4a2): not part of the Community Alpha.
+            return self.async_abort(reason="managed_paths_not_available")
         if self._flash_task is None:
             # Resolve device IP + OTA password before starting flash
             from .flash_uploader import resolve_device_ip, get_ota_password
@@ -1828,14 +2608,16 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._flash_task = None
             return self.async_abort(reason="setup_cancelled")
         except Exception as exc:
-            _LOGGER.exception(
+            _LOGGER.error(
                 "Wizard flash failed (step=progress_flash, device=%s, "
-                "ip=%s, build_id=%s, mac=%s)",
+                "ip=%s, build_id=%s, mac=%s): %s",
                 self._device_id,
                 self._device_ip,
                 self._build_result.build_job_id if self._build_result else None,
                 self._mac_suffix,
+                safe_exc_text(exc),
             )
+            # ``raw_err`` only selects a message; it is not shown or logged.
             raw_err = str(exc)
             pw = getattr(self, "_ota_pw_result", None)
             if "Authentication invalid" in raw_err and pw:
@@ -1858,7 +2640,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "Verify the password matches the device firmware."
                 ).strip()
             else:
-                self._flash_error = f"Flash failed: {exc}"
+                self._flash_error = f"Flash failed: {safe_exc_text(exc)}"
             self._flash_task = None
             return self.async_show_progress_done(
                 next_step_id="error_flash_failed"
@@ -1964,7 +2746,7 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PROXY_API_KEY: self._proxy_api_key,
                 CONF_PROXY_CUSTOMER_ID: self._proxy_customer_id,
                 CONF_BUILD_BACKEND: BUILD_BACKEND_PROXY_REMOTE,
-                CONF_BUILD_SERVICE_MODE: self._build_service_mode,
+                **_mode_option(self._build_service_mode),
                 CONF_ARTIFACT_CHANNEL: DEFAULT_ARTIFACT_CHANNEL,
                 CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT: DEFAULT_PROXY_AUTO_REFRESH,
                 CONF_OTA_RETRIES: DEFAULT_OTA_RETRIES,
@@ -2281,37 +3063,45 @@ def _build_settings_schema(
     options: dict[str, Any],
     device_options: dict[str, str],
 ) -> vol.Schema:
-    """Build the mode-aware Options-flow "settings" schema (#138).
+    """Build the fail-closed Options-flow "settings" schema (#138/PD-15).
 
     ``mode`` is the persisted ``build_service_mode`` from the config entry
-    (``managed`` / ``local_esphome`` / ``self_hosted``). Field visibility hides
-    mode-internal fields from normal Managed/Local users while preserving
-    advanced/self-hosted configurability:
+    (``managed`` / ``local_esphome`` / ``self_hosted``). Normal customer and
+    legacy entries never gain proxy controls from an implicit backend default:
 
-    - generic runtime options (device, poll interval, channel, OTA, cache,
-      proxy_auto_refresh) — visible in all modes;
-    - ``proxy_api_key`` — visible for Managed (Build-Key rotation) + Self-hosted
-      (and legacy-safe); hidden for Local/Adopt;
-    - ``proxy_base_url`` / ``proxy_customer_id`` / ``build_backend`` — self-hosted
-      internals; visible only for Self-hosted (and legacy-safe);
+    - generic runtime options (device, poll interval, channel, OTA, cache)
+      — visible in all modes;
+    - proxy credentials, proxy auto-refresh, and backend controls — visible
+      only when both the internal ``self_hosted`` mode and ``proxy_remote``
+      backend are already explicitly persisted in entry options;
     - ``simulated_failure_mode`` — dev/diagnostic; hidden in ALL modes.
 
-    An unknown/missing mode (legacy/imported entries) is treated legacy-safe:
-    all proxy-relevant fields are shown so an old config never becomes
-    uneditable. Hidden fields are never wiped — the caller merges on submit.
+    Missing, unknown, Managed, Local/Adopt, or incomplete internal contexts are
+    treated as unconfigured/blocked. Hidden fields are never wiped — the caller
+    merges on submit — so this containment does not delete existing credentials
+    or configuration.
+
+    PD-16 / PD-18 (A-4a2): with the managed paths disabled the form offers
+    only the Community Alpha settings, in every mode.
     """
-    is_known_mode = mode in (
-        BUILD_SERVICE_MANAGED,
-        BUILD_SERVICE_LOCAL_ESPHOME,
-        BUILD_SERVICE_SELF_HOSTED,
+    if not _const.managed_paths_enabled():
+        return vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SELECTED_DEVICE,
+                    default=options.get(CONF_SELECTED_DEVICE, ""),
+                ): vol.In(device_options),
+                vol.Optional(
+                    CONF_POLL_INTERVAL,
+                    default=options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+                ): vol.All(int, vol.Range(min=10, max=300)),
+            }
+        )
+
+    show_proxy_internals = (
+        mode == BUILD_SERVICE_SELF_HOSTED
+        and options.get(CONF_BUILD_BACKEND) == BUILD_BACKEND_PROXY_REMOTE
     )
-    is_legacy = not is_known_mode
-    show_api_key = (
-        mode == BUILD_SERVICE_MANAGED
-        or mode == BUILD_SERVICE_SELF_HOSTED
-        or is_legacy
-    )
-    show_proxy_internals = mode == BUILD_SERVICE_SELF_HOSTED or is_legacy
 
     schema: dict[Any, Any] = {
         vol.Optional(
@@ -2328,14 +3118,13 @@ def _build_settings_schema(
         ): vol.In(["stable", "beta"]),
     }
 
-    if show_api_key:
+    if show_proxy_internals:
         schema[
             vol.Optional(
                 CONF_PROXY_API_KEY,
                 default=options.get(CONF_PROXY_API_KEY, DEFAULT_PROXY_API_KEY),
             )
         ] = str
-    if show_proxy_internals:
         schema[
             vol.Optional(
                 CONF_PROXY_BASE_URL,
@@ -2350,16 +3139,18 @@ def _build_settings_schema(
                 ),
             )
         ] = str
-
-    schema[
-        vol.Optional(
-            CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
-            default=options.get(
+        # PD-15/WP3A-1: proxy auto-refresh is a proxy control, not a generic
+        # runtime option — it is gated with the other four proxy fields.
+        schema[
+            vol.Optional(
                 CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
-                DEFAULT_PROXY_AUTO_REFRESH,
-            ),
-        )
-    ] = bool
+                default=options.get(
+                    CONF_PROXY_AUTO_REFRESH_ON_TIMEOUT,
+                    DEFAULT_PROXY_AUTO_REFRESH,
+                ),
+            )
+        ] = bool
+
     schema[
         vol.Optional(
             CONF_OTA_RETRIES,
@@ -2383,7 +3174,9 @@ def _build_settings_schema(
         schema[
             vol.Optional(
                 CONF_BUILD_BACKEND,
-                default=options.get(CONF_BUILD_BACKEND, DEFAULT_BUILD_BACKEND),
+                # No DEFAULT_BUILD_BACKEND here: the field is reachable only
+                # after an explicit persisted proxy backend was established.
+                default=options[CONF_BUILD_BACKEND],
             )
         ] = vol.In([
             "proxy_remote", "simulated", "builder_addon",
@@ -2394,6 +3187,67 @@ def _build_settings_schema(
     # (dev/diagnostic only); existing stored values are preserved on submit.
 
     return vol.Schema(schema)
+
+
+#: The build-service modes this integration recognises. Single source for both
+#: the persistence guard (:func:`_mode_option`) and the reader
+#: (:func:`_resolve_build_service_mode`), so the write side and the read side
+#: cannot drift apart — a value one accepts and the other rejects is exactly
+#: what produces a permanently blocked entry.
+_KNOWN_BUILD_SERVICE_MODES: Final[frozenset[str]] = frozenset(
+    {
+        BUILD_SERVICE_MANAGED,
+        BUILD_SERVICE_LOCAL_ESPHOME,
+        BUILD_SERVICE_SELF_HOSTED,
+    }
+)
+
+
+def _mode_option(mode: str | None) -> dict[str, Any]:
+    """Persist ``build_service_mode`` only when it is a recognised mode.
+
+    Defensive (PD-15/WP3A-1). Since the flow no longer carries an implicit
+    Managed default, an unset mode would otherwise be written as an explicit
+    ``None``. :func:`_resolve_build_service_mode` treats any *present* value
+    outside :data:`_KNOWN_BUILD_SERVICE_MODES` as blocked and never migrates
+    it, so persisting such a value would pin an entry permanently out of every
+    internal context. An *absent* key stays recoverable through the legacy
+    data fallback and the submit-time migration.
+
+    The guard therefore filters on the known-mode set, not merely on ``None``:
+    a future caller passing a stale or misspelled mode string would otherwise
+    create exactly the unhealable entry this helper exists to prevent. No
+    reachable path produces an unknown mode at entry creation today (every menu
+    handler sets a valid mode first).
+    """
+    return (
+        {CONF_BUILD_SERVICE_MODE: mode}
+        if mode in _KNOWN_BUILD_SERVICE_MODES
+        else {}
+    )
+
+
+def _resolve_build_service_mode(
+    options: dict[str, Any],
+    data: dict[str, Any],
+) -> tuple[str | None, bool]:
+    """Resolve persisted build-service mode, options first.
+
+    Returns ``(mode, used_legacy_data_fallback)``. A valid value in options is
+    authoritative. Entry data is consulted only when the options key is truly
+    absent, which supports pre-#128 legacy entries without allowing an invalid
+    or empty options value to fall through into an internal proxy mode.
+    """
+    if CONF_BUILD_SERVICE_MODE in options:
+        option_mode = options.get(CONF_BUILD_SERVICE_MODE)
+        if option_mode in _KNOWN_BUILD_SERVICE_MODES:
+            return option_mode, False
+        return None, False
+
+    legacy_mode = data.get(CONF_BUILD_SERVICE_MODE)
+    if legacy_mode in _KNOWN_BUILD_SERVICE_MODES:
+        return legacy_mode, True
+    return None, False
 
 
 class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
@@ -2510,13 +3364,23 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Core settings: proxy, build, OTA config."""
+        options = self.config_entry.options
+        mode, used_legacy_data_fallback = _resolve_build_service_mode(
+            options,
+            self.config_entry.data,
+        )
+
         if user_input is not None:
             # Merge with existing options (preserve keys not in this form)
-            new_options = dict(self.config_entry.options)
+            new_options = dict(options)
             new_options.update(user_input)
+            # Controlled legacy migration: only a known mode read from data
+            # because options lacked the key is copied into options. Unknown or
+            # explicitly invalid option values remain blocked and are never
+            # silently replaced.
+            if used_legacy_data_fallback and mode is not None:
+                new_options[CONF_BUILD_SERVICE_MODE] = mode
             return self.async_create_entry(title="", data=new_options)
-
-        options = self.config_entry.options
 
         # Build device list for target device selector
         device_options: dict[str, str] = {"": "(no device selected)"}
@@ -2532,9 +3396,8 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
                 "Could not load device list for options flow", exc_info=True
             )
 
-        # #138: mode-aware Options-flow — see _build_settings_schema. Hidden
-        # fields are NOT wiped (async_step_settings merges on submit above).
-        mode = self.config_entry.data.get(CONF_BUILD_SERVICE_MODE)
+        # #138/PD-15: options-first mode resolution and fail-closed proxy field
+        # visibility — see helpers above. Hidden stored fields are NOT wiped.
         return self.async_show_form(
             step_id="settings",
             data_schema=_build_settings_schema(mode, options, device_options),
@@ -2661,11 +3524,11 @@ class PVAutonomyOpsOptionsFlow(config_entries.OptionsFlow):
                                 filename=old_filename,
                                 reason="relocate",
                             )
-                        except Exception:
+                        except Exception as exc:
                             _LOGGER.warning(
-                                "Failed to archive old YAML %s (non-fatal)",
+                                "Failed to archive old YAML %s (non-fatal): %s",
                                 old_filename,
-                                exc_info=True,
+                                safe_exc_text(exc),
                             )
 
                     updated = await metadata_store.update_location(

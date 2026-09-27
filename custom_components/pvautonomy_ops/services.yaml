@@ -178,6 +178,18 @@ install_prepared_firmware:
       required: true
       selector:
         boolean:
+    credential_rotation:
+      name: Credential Rotation Handover
+      description: >-
+        Install a firmware artifact prepared with credential_rotation=true.
+        The upload authenticates with the currently active OTA password;
+        only after upload are the staged credentials promoted and the
+        ESPHome API reauthenticated. Fails closed if artifact, device, or
+        credential fingerprints do not match.
+      required: false
+      default: false
+      selector:
+        boolean:
     entry_id:
       name: Config Entry ID
       description: >-
@@ -219,6 +231,18 @@ build_firmware:
         when the external inverter-registry changed but the local config did
         not. If the proxy still returns a cached artifact, the service fails
         closed instead of reporting success.
+      required: false
+      default: false
+      selector:
+        boolean:
+    credential_rotation:
+      name: Prepare Credential Rotation
+      description: >-
+        Generate an idempotent pending API/OTA credential pair locally and
+        compile it into a cold, cache-bypassed firmware build. Active device
+        credentials are preserved for the later OTA upload. The resulting
+        artifact is cryptographically bound to the pending pair and must be
+        installed with credential_rotation=true.
       required: false
       default: false
       selector:
@@ -304,7 +328,7 @@ set_compile_secret_key:
     CALL FROM Developer Tools -> Actions (UI) ONLY — never from an
     automation/script (service_data may persist in traces/recorder/logbook).
     Avoid YAML mode, screen sharing, and clipboard persistence. See
-    docs/COMPILE-SECRET-KEY-PROVISIONING.md for the full runbook and the
+    docs/managed/COMPILE-SECRET-KEY-PROVISIONING.md for the full runbook and the
     exposure-recovery (clear + rotate both sides) procedure.
   fields:
     entry_id:
