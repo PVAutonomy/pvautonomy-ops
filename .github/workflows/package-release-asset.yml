@@ -11,12 +11,13 @@ name: Package integration release asset
 #   https://github.com/PVAutonomy/pvautonomy-ops/releases/download/vX.Y.Z/pvautonomy_ops-X.Y.Z.zip
 #
 # Triggers:
-#   - release: published   -> packages the released tag automatically
 #   - workflow_dispatch     -> packages an explicit tag (e.g. to backfill v0.4.0)
+#
+# No automatic trigger: a published release is not packaged. Community Alpha
+# releases are source releases without a package asset; do not run this
+# workflow for them.
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
