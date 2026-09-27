@@ -9,7 +9,7 @@ from typing import Final
 
 # Integration metadata
 DOMAIN = "pvautonomy_ops"
-VERSION = "0.4.33"
+VERSION = "0.5.0"
 CONTRACT_VERSION = "v1.0.0"
 
 # Update interval (seconds)
