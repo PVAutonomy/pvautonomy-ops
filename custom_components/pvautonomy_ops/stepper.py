@@ -24,6 +24,7 @@ from typing import Any, Callable
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .log_safety import safe_exc_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1058,10 +1059,10 @@ class WizardEngine:
             )
             return False
 
-        except Exception:
+        except Exception as exc:
             _LOGGER.warning(
-                "Auto-reauth failed unexpectedly — falling back to manual flow",
-                exc_info=True,
+                "Auto-reauth failed unexpectedly (%s) — falling back to manual flow",
+                safe_exc_text(exc),
             )
             self._log("Auto-reauth error — falling back to manual key save.")
             self._transition_to_manual_key_save(

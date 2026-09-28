@@ -187,6 +187,7 @@ async def run_build_pipeline(
     modbus_version: int | None = None,
     map_confirmed: bool = False,
     force_rebuild: bool = False,
+    credential_rotation: bool = False,
     entry_id: str | None = None,
 ) -> PipelineResult:
     """Run the full Auto Configure → Compile → (local store) pipeline.
@@ -212,6 +213,10 @@ async def run_build_pipeline(
                        registry-only update produces fresh firmware. Has no
                        effect on non-proxy backends. The generated YAML bytes
                        are unchanged; only the proxy cache lookup is bypassed.
+        credential_rotation: Compile with the staged pending per-device API
+                             key and OTA password. Requires ``force_rebuild``
+                             and the proxy backend; active device credentials
+                             remain available to the later OTA upload.
 
     Returns:
         PipelineResult with artifact bytes on success.
@@ -240,12 +245,23 @@ async def run_build_pipeline(
                 "build_backend": result.build_backend,
                 "is_simulated": result.is_simulated,
                 "force_rebuild": force_rebuild,
+                "credential_rotation": credential_rotation,
                 **extra,
             },
         )
 
     _fire_event("init", 0)
     _LOGGER.info("Build pipeline started for %s", device_id)
+
+    if credential_rotation and not force_rebuild:
+        result.error = (
+            "Credential rotation requires force_rebuild=true; refusing a "
+            "potentially cached firmware artifact"
+        )
+        result.duration_s = time.monotonic() - start_time
+        _fire_event("failed", 100, error=result.error)
+        _LOGGER.error(result.error)
+        return result
 
     # ---------------------------------------------------------------
     # Stage 1: Auto Configure — generate device-specific YAML
@@ -291,6 +307,16 @@ async def run_build_pipeline(
     result.build_backend = effective_backend
     result.is_simulated = is_simulated
     _fire_event("compile_start", 20, detail=f"Submitting build ({effective_backend})")
+
+    if credential_rotation and effective_backend != BUILD_BACKEND_PROXY_REMOTE:
+        result.error = (
+            "Credential rotation is supported only by the authenticated "
+            "production build backend"
+        )
+        result.duration_s = time.monotonic() - start_time
+        _fire_event("failed", 100, error=result.error)
+        _LOGGER.error(result.error)
+        return result
 
     backend: BuildBackend
     if effective_backend == BUILD_BACKEND_SIMULATED:
@@ -429,60 +455,89 @@ async def run_build_pipeline(
                     "Secret provisioning issues: %s", provision.errors,
                 )
 
-        # EPIC-011: Resolve device-specific api encryption key for
-        # compile-time injection.  The key is sent per-build (not stored
-        # in GHA) so each build gets exactly the one key it needs.
-        compile_secrets: dict[str, str] = {}
-        if mac_suffix:
-            from .keyring import resolve_noise_psk_from_secrets
-
-            api_key = await hass.async_add_executor_job(
-                resolve_noise_psk_from_secrets, hass, mac_suffix,
+        if credential_rotation:
+            # Compile the new pair under the canonical !secret names while
+            # leaving the canonical values on disk untouched. The install
+            # step can therefore authenticate to the still-old firmware.
+            if not mac_suffix:
+                result.error = "Credential rotation requires a device MAC suffix"
+                result.duration_s = time.monotonic() - start_time
+                _fire_event("failed", 100, error=result.error)
+                _LOGGER.error(result.error)
+                return result
+            from .credential_rotation import (
+                CredentialRotationError,
+                resolve_pending_compile_secrets_sync,
             )
-            if api_key:
-                compile_secrets[f"edge101_api_key_{mac_suffix}"] = api_key
-                _LOGGER.info(
-                    "Compile secret resolved: edge101_api_key_%s (value masked)",
+
+            try:
+                compile_secrets = await hass.async_add_executor_job(
+                    resolve_pending_compile_secrets_sync,
+                    hass.config.config_dir,
                     mac_suffix,
                 )
-
-        # SEC-010 D1+D2: Resolve OTA password for proxy builds
-        from .flash_uploader import get_ota_password
-        ota_pw_result = await hass.async_add_executor_job(
-            get_ota_password, hass, mac_suffix or ""
-        )
-        if ota_pw_result is None:
-            result.error = (
-                "SEC-010: OTA password missing — build aborted. "
-                "Expected 'edge101_ota_password_{suffix}' (per-device) "
-                "in esphome/secrets.yaml. "
-                "Auto-provisioning should have created this — "
-                "check logs for provisioning errors. "
-                "(Legacy 'ota_password' is accepted locally but is not "
-                "supported end-to-end by the remote build workflow.)"
+            except CredentialRotationError as exc:
+                result.error = f"Credential rotation state invalid: {exc}"
+                result.duration_s = time.monotonic() - start_time
+                _fire_event("failed", 100, error=result.error)
+                _LOGGER.error(result.error)
+                return result
+            _LOGGER.info(
+                "Compile secrets resolved from pending rotation profile for %s "
+                "(values masked)",
+                mac_suffix,
             )
-            result.duration_s = time.monotonic() - start_time
-            _fire_event("failed", 100, error=result.error)
-            _LOGGER.error(result.error)
-            return result
-        _LOGGER.info(
-            "SEC-010: OTA password resolved (key=%s, scope=%s, source=%s)",
-            ota_pw_result.key_name,
-            ota_pw_result.scope,
-            Path(ota_pw_result.source_file).name,
-        )
+        else:
+            # EPIC-011: Resolve device-specific API encryption key for
+            # compile-time injection. The key is sent per-build (not stored
+            # in GHA) so each build gets exactly the one key it needs.
+            compile_secrets = {}
+            if mac_suffix:
+                from .keyring import resolve_noise_psk_from_secrets
+
+                api_key = await hass.async_add_executor_job(
+                    resolve_noise_psk_from_secrets, hass, mac_suffix,
+                )
+                if api_key:
+                    compile_secrets[f"edge101_api_key_{mac_suffix}"] = api_key
+                    _LOGGER.info(
+                        "Compile secret resolved: edge101_api_key_%s "
+                        "(value masked)",
+                        mac_suffix,
+                    )
+
+            # SEC-010 D1+D2: Resolve active OTA password for normal builds.
+            from .flash_uploader import get_ota_password
+            ota_pw_result = await hass.async_add_executor_job(
+                get_ota_password, hass, mac_suffix or ""
+            )
+            if ota_pw_result is None:
+                result.error = (
+                    "SEC-010: OTA password missing — build aborted. "
+                    "Expected 'edge101_ota_password_{suffix}' (per-device) "
+                    "in esphome/secrets.yaml. "
+                    "Auto-provisioning should have created this — "
+                    "check logs for provisioning errors. "
+                    "(Legacy 'ota_password' is accepted locally but is not "
+                    "supported end-to-end by the remote build workflow.)"
+                )
+                result.duration_s = time.monotonic() - start_time
+                _fire_event("failed", 100, error=result.error)
+                _LOGGER.error(result.error)
+                return result
+            _LOGGER.info(
+                "SEC-010: OTA password resolved (key=%s, scope=%s, source=%s)",
+                ota_pw_result.key_name,
+                ota_pw_result.scope,
+                Path(ota_pw_result.source_file).name,
+            )
+            compile_secrets[ota_pw_result.key_name] = ota_pw_result.password
+            _LOGGER.info(
+                "Compile secret added: %s (scope=%s, value masked)",
+                ota_pw_result.key_name,
+                ota_pw_result.scope,
+            )
         backend.set_ota_required(True)
-        # Forward OTA password as compile secret so GHA compiles the
-        # same value that the local flash_uploader will use.  Uses the
-        # same AES-256-GCM encrypted channel as the API key.
-        # The secret name must match the YAML generator output:
-        #   !secret edge101_ota_password_{mac_suffix}
-        compile_secrets[ota_pw_result.key_name] = ota_pw_result.password
-        _LOGGER.info(
-            "Compile secret added: %s (scope=%s, value masked)",
-            ota_pw_result.key_name,
-            ota_pw_result.scope,
-        )
 
         # Set build context AFTER all compile_secrets are collected
         # (API key + OTA password).

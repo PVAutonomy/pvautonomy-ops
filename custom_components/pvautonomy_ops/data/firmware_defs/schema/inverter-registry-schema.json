@@ -122,6 +122,10 @@
         "on_value": { "type": "integer" },
         "off_value": { "type": "integer" },
         "skip_updates": { "type": "integer", "minimum": 0 },
+        "readback_after_write": {
+          "type": "boolean",
+          "description": "Opt-in: after every write to this holding register the generator emits an on_command_sent hook that re-reads it (FC03) twice and republishes. Counters the ESPHome self-display (modbus_number.cpp publishes the written value without confirmation). Requires force_new_range to stay true. Refs #299."
+        },
         "options": {
           "type": "object",
           "description": "Raw-value -> human label map (selects, or read-only mode sensors).",

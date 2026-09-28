@@ -3,12 +3,10 @@
     "step": {
       "user": {
         "title": "PVAutonomy Einrichtung",
-        "description": "Wie möchten Sie Ihr PVAutonomy-Gerät hinzufügen?\n\n**Managed Build Service** — PVAutonomy erstellt und flasht Ihre Firmware. Erfordert einen PVAutonomy Build-Key.\n\n**Laufendes Gerät registrieren** — Ihr Gerät läuft bereits. Es wird nichts gebaut oder geflasht.\n\n**Lokaler ESPHome-Build** — Firmware selbst erstellen und flashen mit ESPHome. Kein Build-Key erforderlich.\n\n**Erweitert / eigener Proxy** — eigene Proxy-URL und Zugangsdaten verwenden.",
+        "description": "Wählen Sie, wie Sie fortfahren möchten.\n\n**Neuen Controller einrichten** — Richtet Ihr PVAutonomy-Steuergerät ein (derzeit: Edge101), die kleine Box, die per Kabel mit Ihrem Wechselrichter verbunden wird. PVAutonomy bereitet alles Nötige vor und fragt dabei einmal nach Ihrem WLAN. Die Firmware des Controllers erstellen und installieren Sie selbst mit dem ESPHome-Werkzeug — die Anleitung „Local ESPHome self-build“ führt Sie Schritt für Schritt; ein USB-Kabel wird einmalig gebraucht. Bei der Einrichtung wird am Wechselrichter nichts verändert. Läuft der Controller, kehren Sie hierher zurück und wählen „Laufenden Controller übernehmen“.\n\n**Laufenden Controller übernehmen** — Einen bereits laufenden Controller registrieren. Es wird nichts gebaut, installiert oder neu geflasht.",
         "menu_options": {
-          "managed_build": "Firmware mit PVAutonomy Managed Service erstellen und installieren",
-          "adopt_direct": "Laufendes Gerät registrieren (kein Firmware-Build)",
-          "local_esphome": "Firmware selbst erstellen und installieren (ESPHome)",
-          "advanced_proxy": "Erweitert / eigener Proxy"
+          "setup_new": "Neuen Controller einrichten",
+          "adopt_existing": "Laufenden Controller übernehmen"
         }
       },
       "managed_key": {
@@ -23,7 +21,19 @@
       },
       "local_esphome_guide": {
         "title": "Firmware mit ESPHome erstellen",
-        "description": "Erstellen und installieren Sie Ihre Firmware lokal mit ESPHome — kein PVAutonomy Build-Key erforderlich.\n\n**Schritte:**\n1. Wählen Sie auf den nächsten Seiten Ihr Wechselrichter-Modell aus.\n2. Erstellen Sie die Firmware mit ESPHome Dashboard oder ESPHome CLI.\n3. Verwenden Sie Ihren eigenen api.encryption.key und ota.password.\n4. Flashen Sie Ihr Gerät.\n5. Kehren Sie zu PVAutonomy zurück und wählen Sie **Laufendes Gerät registrieren**."
+        "description": "Auf den nächsten Seiten wählen Sie Ihr Wechselrichter-Modell. Danach erstellen Sie die Firmware mit dem ESPHome Device Builder und übertragen sie per USB auf den Controller — die Anleitung „Local ESPHome self-build“ führt Sie durch jeden Schritt. Die benötigten Zugangsdaten bereitet PVAutonomy für Sie vor."
+      },
+      "local_wifi_credentials": {
+        "title": "WLAN für das Gerät",
+        "description": "Die Firmware, die Sie gleich bauen, muss wissen, in welches WLAN sie sich einbuchen soll.\n\nPVAutonomy legt Ihre Eingabe in Ihrer ESPHome-`secrets.yaml` als `wifi_ssid` und `wifi_password` ab, damit der Build sie findet. Einträge, die dort schon stehen, werden nie verändert; dieser Bildschirm erscheint nur für die fehlenden.\n\nDie Eingabe gelangt von dieser Seite zu Home Assistant, so wie jede andere Einstellung, die Sie in Home Assistant eintippen, und wird dann in dieser Datei auf dieser Instanz gespeichert. Sie geht nicht an PVAutonomy und auch sonst nirgendwohin, und Home Assistant zeigt sie danach nicht wieder an.",
+        "data": {
+          "wifi_ssid": "WLAN-Name (SSID)",
+          "wifi_password": "WLAN-Passwort"
+        },
+        "data_description": {
+          "wifi_ssid": "Muss ein 2,4-GHz-Netz sein — das Gerät hat kein 5-GHz-Funkmodul. Schreiben Sie den Namen genau so, wie er angezeigt wird, mit Groß- und Kleinschreibung. Höchstens 32 Zeichen.",
+          "wifi_password": "Das Passwort dieses 2,4-GHz-Netzes: 8 bis 63 Zeichen, Buchstaben, Ziffern, Leerzeichen und übliche Satzzeichen."
+        }
       },
       "proxy": {
         "title": "Eigener Proxy",
@@ -65,6 +75,13 @@
           "number": "Gerätenummer an diesem Standort (1-10)."
         }
       },
+      "local_yaml_confirm_existing": {
+        "title": "Gerät existiert bereits",
+        "description": "In diesem Home Assistant existiert bereits ein Gerät namens\n`{device_name}`, und Ihre Eingaben ergeben denselben Node-Namen\n`{node_name}`.\n\nFortfahren heißt, Firmware für **genau dieses Gerät** zu bauen — so\nbeginnt ein gewollter Neu-Flash, und das ist in Ordnung, wenn Sie das\nvorhaben.\n\nFür ein **neues** Gerät gehen Sie zurück und wählen einen anderen Standort\noder eine andere Gerätenummer. Sonst trüge die neue Firmware die Identität\ndes oben genannten Geräts.\n",
+        "data": {
+          "confirm_rebuild": "Ja, Firmware für dieses vorhandene Gerät neu bauen"
+        }
+      },
       "target_device": {
         "title": "Zielgerät auswählen",
         "description": "Wählen Sie das physische Gerät (aus Home Assistant) für diese Konfiguration. Nur ESPHome-Geräte mit bekannter MAC-Adresse werden angezeigt.",
@@ -72,7 +89,7 @@
           "ha_device_id": "Zielgerät"
         },
         "data_description": {
-          "ha_device_id": "ESPHome-Gerät auswählen. Geräte, die bereits einem anderen PVAutonomy-Eintrag zugewiesen sind, werden nicht angezeigt."
+          "ha_device_id": "ESPHome-Gerät auswählen. Geräte, die PVAutonomy bereits kennt, sind mit „— re-flash“ markiert. Ein Gerät, das bereits einem anderen PVAutonomy-Eintrag zugewiesen ist, lässt sich nicht ein zweites Mal übernehmen."
         }
       },
       "confirm_relocate": {
@@ -150,8 +167,8 @@
         }
       },
       "local_yaml_ready": {
-        "title": "Geräte-YAML bereit",
-        "description": "Die ESPHome-Geräte-YAML wurde erzeugt und gespeichert unter:\n\n`{yaml_path}`\n\n**Nächste Schritte:**\n\n1. Öffnen Sie die Datei mit dem File-Editor-Add-on, Samba oder Terminal/SSH.\n2. Kompilieren Sie sie mit ESPHome Dashboard oder ESPHome CLI.\n3. Ergänzen Sie diese Einträge in Ihrer ESPHome **secrets.yaml**:\n   ```\n   api_encryption_key: <Ihr 32-Byte-Base64-Key>\n   ota_password: <Ihr OTA-Passwort>\n   ```\n4. Bauen und flashen Sie das Gerät.\n5. Kehren Sie zu PVAutonomy zurück und wählen Sie **Bereits laufendes Gerät registrieren**.\n\nFür diesen Pfad ist kein PVAutonomy Build-Key erforderlich."
+        "title": "Bereit zum Flashen",
+        "description": "Die Konfiguration für Ihren Controller ist fertig — im ESPHome Device Builder erscheint sie bereits als Gerät.\n\n**Nächste Schritte:**\n\n1. Öffnen Sie den ESPHome Device Builder. Am Gerät im **⋮-Menü: Validieren**, dann **Installieren** — der Controller ist per USB-Datenkabel angeschlossen.\n2. Läuft der Controller, kehren Sie zu PVAutonomy zurück und wählen „Laufenden Controller übernehmen“."
       }
     },
     "progress": {
@@ -163,6 +180,7 @@
       "proxy_too_old": "Build-Proxy unterstützt keine Auto-Identifikation (/whoami). Bitte Proxy aktualisieren oder Support kontaktieren.",
       "proxy_auth_failed": "API-Schlüssel vom Proxy abgelehnt. Bitte prüfen Sie Ihren API-Schlüssel.",
       "site_too_short": "Standortname muss mindestens 2 Zeichen lang sein.",
+      "site_conflicts_with_preset": "Sie haben einen eigenen Standortnamen eingegeben, aber \"{preset}\" ausgewählt. Wählen Sie \"Custom…\", um Ihren Text zu verwenden, oder leeren Sie das Feld, um die Vorauswahl zu nutzen.",
       "number_out_of_range": "Gerätenummer muss zwischen 1 und 10 liegen.",
       "no_device_selected": "Bitte wählen Sie ein Zielgerät aus.",
       "device_not_found": "Ausgewähltes Gerät nicht in Home Assistant gefunden.",
@@ -173,8 +191,13 @@
       "build_key_rejected": "Build-Key nicht erkannt. Überprüfen Sie Ihren Build-Key oder kontaktieren Sie PVAutonomy.",
       "build_service_unavailable": "PVAutonomy Build-Service ist derzeit nicht erreichbar. Prüfen Sie Ihre Internetverbindung.",
       "build_account_incomplete": "Build-Key akzeptiert, aber Konto-Einrichtung ist unvollständig. Kontaktieren Sie den PVAutonomy-Support.",
-      "missing_required_entities": "Das ausgewählte Gerät stellt nicht die erwarteten PVAutonomy-ESPHome-Entitäten bereit. Erzeuge die YAML erneut über Local ESPHome, benenne die generierten Entitäten nicht um, flashe das Gerät erneut, warte bis Home Assistant alle ESPHome-Entitäten angelegt hat, und versuche Adopt Direct erneut.",
-      "entity_surface_validation_failed": "Der Entitäts-Oberflächenvertrag konnte für dieses Modell nicht geladen werden. Die PVAutonomy-Integration ist möglicherweise unvollständig oder beschädigt. Installiere die Integration neu oder aktualisiere sie (HACS oder Installer) und versuche Adopt Direct erneut."
+      "missing_required_entities": "Das ausgewählte Gerät stellt nicht die erwarteten PVAutonomy-ESPHome-Entitäten bereit. Erzeugen Sie die Gerätekonfiguration erneut mit „Neuen Controller einrichten“, benennen Sie erzeugte Entitäten nicht um, flashen Sie das Gerät erneut, warten Sie, bis Home Assistant alle ESPHome-Entitäten angelegt hat, und wählen Sie dann erneut „Laufenden Controller übernehmen“.",
+      "entity_surface_validation_failed": "Der Entitäts-Oberflächenvertrag konnte für dieses Modell nicht geladen werden. Die PVAutonomy-Integration ist möglicherweise unvollständig oder beschädigt. Installieren Sie die Integration neu oder aktualisieren Sie sie (über HACS oder von Hand), und wählen Sie dann erneut „Laufenden Controller übernehmen“.",
+      "confirm_rebuild_required": "Setzen Sie das Häkchen, um zu bestätigen, dass Sie die Firmware für dieses vorhandene Gerät neu bauen.",
+      "wifi_ssid_required": "Geben Sie den Namen des 2,4-GHz-WLANs an, in das sich das Gerät einbuchen soll.",
+      "wifi_ssid_invalid": "Das ist kein verwendbarer Netzwerkname. Eine SSID hat höchstens 32 Zeichen und enthält keine Steuerzeichen. Vergleichen Sie ihn mit der Anzeige Ihres Routers.",
+      "wifi_password_required": "Geben Sie das Passwort dieses WLANs an. Eine leere Eingabe würde als leeres Secret gespeichert, und der Build würde daran scheitern.",
+      "wifi_password_invalid": "Das ist keine verwendbare WPA2-Passphrase. Sie muss 8 bis 63 Zeichen lang sein und darf nur Buchstaben, Ziffern, Leerzeichen und übliche Satzzeichen enthalten. Wenn Ihr Netz etwas anderes braucht, tragen Sie den Eintrag vor dem Assistenten selbst in Ihre ESPHome-secrets.yaml ein."
     },
     "abort": {
       "already_configured": "Dieses Gerät ist bereits konfiguriert.",
@@ -183,7 +206,13 @@
       "device_already_bound": "Gerät ist bereits einer anderen Konfiguration zugewiesen.",
       "compile_secret_missing_or_invalid": "Build-Verschlüsselung ist nicht eingerichtet. Bitte schließen Sie zuerst die PVAutonomy-Operator-Provisionierung (COMPILE_SECRET_KEY) ab, bevor Sie einen Firmware-Build starten.",
       "managed_build_not_configured": "Firmware-Builds sind für Ihr Konto noch nicht aktiviert. Kontaktieren Sie Ihren PVAutonomy-Anbieter, um den verwalteten Build-Service zu aktivieren.",
-      "local_yaml_exported": "Local-ESPHome-YAML exportiert. Bauen und flashen Sie das Gerät mit ESPHome und registrieren Sie danach das laufende Gerät."
+      "local_build_install_not_available": "Der unterstützte kostenlose lokale Build- und Installationspfad ist in dieser Version noch nicht verfügbar. Die Einrichtung wurde sicher beendet; Managed Service, gehosteter Proxy und manueller YAML-Export wurden nicht verwendet.",
+      "local_yaml_exported": "Local-ESPHome-YAML exportiert. Bauen und flashen Sie das Gerät mit ESPHome und registrieren Sie danach das laufende Gerät.",
+      "local_yaml_target_exists": "In `/config/esphome/` existiert bereits eine Datei `{node_name}.yaml`.\nDie Einrichtung wurde beendet, ohne sie anzutasten — es könnte eine von\nIhnen bearbeitete Gerätekonfiguration sein.\n\nWas Sie tun können: Benennen Sie die vorhandene Datei im ESPHome Device\nBuilder um oder entfernen Sie sie, oder starten Sie die Einrichtung mit\nanderem Standort oder anderer Gerätenummer erneut.",
+      "local_yaml_generation_failed": "Die Geräte-YAML für `{node_name}` konnte nicht erzeugt werden. Es wurde nichts geschrieben, und es gibt keine Datei zum Bauen. Die Einrichtung wurde hier beendet, statt Erfolg zu melden.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie im Home-Assistant-Log die Einträge zu `pvautonomy_ops` auf den vollständigen Traceback, kontrollieren Sie, ob Hersteller und Wechselrichter-Modell richtig gewählt sind, und starten Sie die Einrichtung erneut. Wenn es bei einem unterstützten Modell weiter fehlschlägt, melden Sie es bitte mit diesem Log-Auszug — ohne Ihre `secrets.yaml`.",
+      "local_yaml_write_failed": "Die Geräte-YAML für `{node_name}` wurde erzeugt, konnte aber nicht unter `/config/esphome/` gespeichert werden. Es gibt daher keine Datei zum Bauen. Die Einrichtung wurde hier beendet, statt Erfolg zu melden.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie, ob das Verzeichnis `/config` beschreibbar ist und freien Speicher hat, und starten Sie die Einrichtung erneut. Mit dem File-Editor-Add-on, Samba oder Terminal/SSH können Sie den Ordner `esphome` selbst kontrollieren.",
+      "local_secrets_write_failed": "Ihre ESPHome-`secrets.yaml` konnte nicht vorbereitet werden. Die Einträge, die der Build braucht, fehlen daher, und eine Geräte-YAML zu erzeugen wäre sinnlos. Die Einrichtung wurde hier beendet, statt Erfolg zu melden. An der Datei wurde nichts geändert.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie, ob `/config/esphome/` beschreibbar ist und freien Speicher hat und ob die dortige `secrets.yaml` gültiges YAML ist — ein `name: wert` pro Zeile. Mit dem File-Editor-Add-on, Samba oder Terminal/SSH können Sie sie selbst öffnen. Starten Sie die Einrichtung danach erneut.",
+      "managed_paths_not_available": "Dieser Einrichtungsweg gehört nicht zur PVAutonomy Community Alpha. Wählen Sie „Neuen Controller einrichten“ oder „Laufenden Controller übernehmen“."
     }
   },
   "entity": {
@@ -226,12 +255,13 @@
         "menu_options": {
           "settings": "Einstellungen",
           "relocate": "Gerät umsetzen",
-          "cleanup_entities": "Alte Entitäten bereinigen"
+          "cleanup_entities": "Alte Entitäten bereinigen",
+          "system_dashboard": "System-Dashboard"
         }
       },
       "settings": {
         "title": "Einstellungen",
-        "description": "Proxy-, Build- und OTA-Einstellungen konfigurieren.",
+        "description": "Geräte- und Wartungseinstellungen konfigurieren.",
         "data": {
           "selected_device": "Aktives Gerät",
           "poll_interval_sec": "Abfrageintervall (Sekunden)",
@@ -302,6 +332,20 @@
         "title": "Bereinigung abgeschlossen",
         "description": "Alte Präfixe: {old_prefixes}\n\n- Deaktiviert: **{disabled}**\n- Gelöscht: **{deleted}**\n- Übersprungen (bereits deaktiviert): **{skipped}**\n- Fehler: **{errors}**\n\nPrüfen Sie Dashboards und Automationen auf Verweise auf alte Entity-IDs."
       },
+      "sysdash_enabled": {
+        "title": "System-Dashboard",
+        "description": "Das PVAutonomy-System-Dashboard ist derzeit **aktiviert** und wird automatisch verwaltet. Um es zu entfernen, setzen Sie unten das Häkchen. Das Dashboard wird entfernt und nicht automatisch neu erstellt; Ihre Geräte-Dashboards und die Integration bleiben installiert. Sie können es später hier wieder aktivieren.",
+        "data": {
+          "confirm_disable": "System-Dashboard entfernen und deaktiviert lassen"
+        }
+      },
+      "sysdash_disabled": {
+        "title": "System-Dashboard",
+        "description": "Das PVAutonomy-System-Dashboard ist derzeit **deaktiviert**. Um es zurückzuholen, setzen Sie unten das Häkchen. Es wird aus Ihren aktuellen Geräten neu aufgebaut; eigene Änderungen am entfernten Dashboard werden nicht wiederhergestellt, und Ihre Geräte-Dashboards bleiben unberührt.",
+        "data": {
+          "confirm_enable": "System-Dashboard wieder aktivieren"
+        }
+      },
       "grid_menu": {
         "title": "Netzleistung",
         "description": "Aktueller Status: **{capability_state}** ({reason}).\n{candidate_count} Leistungssensor(en) erkannt; MQTT-Integration vorhanden: {mqtt}.\nWählen Sie, wie die Netzleistung bereitgestellt wird (optional).\nUnterstützte Smart Meter (SHRDZM) erkannt: {shrdzm_detected} ({shrdzm_usable} verwendbar).",
@@ -370,6 +414,12 @@
     },
     "abort": {
       "relocate_blocked": "Umsetzen ist vorübergehend deaktiviert. Die aktuelle Implementierung kann die ESPHome-Verschlüsselungskontinuität nicht garantieren — das Gerät würde ohne Verschlüsselungsschlüssel als neu erkannt, was ein Sicherheitsrisiko darstellt. Dies wird in einem künftigen Update behoben.",
+      "system_dashboard_removed": "Das System-Dashboard wurde entfernt und bleibt deaktiviert, bis Sie es hier wieder aktivieren.",
+      "system_dashboard_enabled": "Das System-Dashboard ist wieder aktiviert und wurde neu aufgebaut.",
+      "system_dashboard_no_change": "Am System-Dashboard wurde nichts geändert.",
+      "system_dashboard_partial": "Das System-Dashboard wurde entfernt, aber ein letzter Aufräumschritt wurde nicht abgeschlossen. Es bleibt deaktiviert; Sie können den Vorgang erneut ausführen, um ihn abzuschließen.",
+      "system_dashboard_ambiguous": "Das System-Dashboard konnte nicht automatisch entfernt werden, weil sein aktueller Zustand unklar ist. Es wurde nichts geändert.",
+      "system_dashboard_error": "Das System-Dashboard konnte gerade nicht aktualisiert werden. Es wurde nichts geändert; bitte erneut versuchen.",
       "manager_unavailable": "Netzleistung ist noch nicht bereit. Bitte in einem Moment erneut versuchen.",
       "invalid_mapping": "Die gewählte Netzleistungs-Zuordnung ist ungültig."
     }
@@ -389,6 +439,9 @@
     }
   },
   "exceptions": {
+    "build_path_not_available": {
+      "message": "Firmware-Erstellung ist in dieser Version nicht verfügbar. Für dieses Gerät ist kein unterstützter Build-Pfad aktiviert; es wurde keine Firmware erstellt und nichts installiert."
+    },
     "device_not_set_up": {
       "message": "Gerät „{device_name}“ ist in PVAutonomy noch nicht eingerichtet. Öffne Einstellungen > Geräte & Dienste > PVAutonomy Ops und übernimm das laufende Gerät („Adopt“) oder starte die Einrichtung."
     },

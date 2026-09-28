@@ -25,9 +25,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
 from homeassistant.core import HomeAssistant
+
+from .esphome_secrets import SecretsFileUnreadableError, _read_secrets_strict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,6 +170,17 @@ async def ota_upload(
         OTAError: If upload fails at any protocol stage
         asyncio.TimeoutError: If overall timeout exceeded
     """
+    # Encode the password once, before any file or network I/O. A value that
+    # is not valid UTF-8 (a lone surrogate can come from secrets.yaml) would
+    # otherwise raise UnicodeEncodeError mid-handshake, and that message names
+    # a character of the password and its position.
+    password_bytes: bytes | None = None
+    if password is not None:
+        try:
+            password_bytes = password.encode("utf-8")
+        except UnicodeEncodeError:
+            raise OTAError("OTA password is not valid UTF-8") from None
+
     _LOGGER.info("OTA upload starting → %s:%d", host, port)
 
     # Read firmware in executor (blocking I/O)
@@ -246,7 +257,7 @@ async def ota_upload(
 
             # Compute challenge response: SHA256(password ‖ nonce ‖ cnonce)
             hasher = hashlib.sha256()
-            hasher.update(password.encode("utf-8"))
+            hasher.update(password_bytes)
             hasher.update(nonce.encode("ascii"))
             hasher.update(cnonce.encode("ascii"))
             auth_result = hasher.hexdigest()
@@ -755,11 +766,8 @@ def get_ota_password(hass: HomeAssistant, device_id: str) -> OtaPasswordResult |
             if str(secrets_path) not in tried_files:
                 tried_files.append(str(secrets_path))
             try:
-                if not secrets_path.exists():
-                    continue
-                with open(secrets_path, encoding="utf-8") as fh:
-                    data = yaml.safe_load(fh)
-                if data and secret_key in data:
+                data = _read_secrets_strict(secrets_path)
+                if secret_key in data:
                     _LOGGER.info(
                         "OTA password loaded from %s (key: %s, scope: %s, device: %s)",
                         secrets_path.name, secret_key, scope, device_id,
@@ -770,8 +778,14 @@ def get_ota_password(hass: HomeAssistant, device_id: str) -> OtaPasswordResult |
                         source_file=str(secrets_path),
                         scope=scope,
                     )
+            except SecretsFileUnreadableError as exc:
+                # Fixed reason only: str() of a parser or decoder error
+                # carries text from the file, here a secret (#324).
+                _LOGGER.warning("Cannot read %s: %s", secrets_path.name, exc.reason)
             except Exception as exc:
-                _LOGGER.warning("Failed to read %s: %s", secrets_path, exc)
+                _LOGGER.warning(
+                    "Cannot read %s (%s)", secrets_path.name, type(exc).__name__
+                )
 
     _LOGGER.warning(
         "OTA password not found (tried: %s in %s)",

@@ -1,122 +1,132 @@
-# Setup Guide
+# Setup wizard
 
-After installation, configure PVAutonomy to build and flash firmware for your Edge101 devices.
+This page walks through the PVAutonomy setup screen by screen. Screen titles
+and messages are quoted as the integration shows them in English.
 
-## Installation
-
-`pvautonomy_ops` 0.4.16 ships through two supported paths (both deliver the same
-release artifact — see [Installation](INSTALLATION.md)):
-
-- **Customer / app path:** the PVAutonomy Installer/Updater add-on (`stable`
-  channel). No HACS required.
-- **Developer / HACS path:** HACS custom repository `PVAutonomy/pvautonomy-ops`
-  (Integration category, `stable`).
-
-Both paths are validated. Firmware definitions are bundled in the integration
-release under `data/firmware_defs/**`; no `/config/inverter-registry` or
-`/config/esphome` files are needed.
-
-## Preflight Checklist
-
-Before your first build, verify these items:
-
-- [ ] **Proxy API key ready:** You have a PVAutonomy Managed Build Service API key (shown as `pva_...`). This key is **required** before starting the wizard — obtain it from your PVAutonomy provider before the system is set up. It is **not** the same thing as the `COMPILE_SECRET_KEY` (a separate, operator-/provider-provisioned secret; see below).
-- [ ] **Proxy reachable:** Open `https://pvautonomy-proxy.pvautonomy-proxy.workers.dev/health` in a browser. You should see `{"status":"ok",...}`.
-- [ ] **Customer ID:** Leave empty — it is automatically derived from your installation. Only set if your provider explicitly gives you a specific one.
-- [ ] **Edge101 online:** Your device is powered on and visible in Settings > Devices & Services > ESPHome.
-- [ ] **Expected build time:** A firmware build takes **8-10 minutes** (GitHub Actions). The first build may take slightly longer.
-
-## Setup flow at a glance
-
-1. Install the integration via the Installer/Updater add-on **or** HACS
-   (see [Installation](INSTALLATION.md)).
-2. Enter your Managed Build Service API key (`pva_...`) in the wizard.
-3. The integration calls the proxy's `/whoami` endpoint, authenticated by that
-   key.
-4. Your `customer_id` is **derived server-side** from the key — you do not set
-   or need to know it.
-5. Leave **Customer ID** empty (only set it if your provider gives you a
-   specific one).
-6. Select your Edge101 device.
-7. Builds run through `proxy_remote`; each build request carries provenance and
-   integrity metadata (`defs_version`, `yaml_hash`) automatically.
-8. `COMPILE_SECRET_KEY` is a **separate** secret, provisioned out-of-band by
-   your provider/operator — it is **not** the `pva_...` API key and there is no
-   in-product self-service onboarding for it today. See
-   [COMPILE-SECRET-KEY-PROVISIONING.md](COMPILE-SECRET-KEY-PROVISIONING.md) and
-   [Security](SECURITY.md).
-
-## Open Options
-
-1. Go to **Settings > Devices & Services**.
-2. Find **PVAutonomy** and click **Configure**.
-
-## Configure the Build Backend
-
-Set **Build backend** to `proxy_remote`. This uses the PVAutonomy cloud proxy to compile firmware via GitHub Actions.
-
-### Required fields
-
-| Field | Value | Notes |
-|-------|-------|-------|
-| **Build backend** | `proxy_remote` | Cloud-based firmware compilation |
-| **Proxy API key** | `pva_...` | Your API key from your PVAutonomy provider |
-
-### Optional fields
-
-| Field | Default | Notes |
-|-------|---------|-------|
-| **Proxy URL** | `https://pvautonomy-proxy...workers.dev` | Only change if directed by your provider |
-| **Customer ID** | *(empty)* | Leave empty to auto-derive from your installation. Only set if your provider gives you a specific ID |
-
-## Select a Device
-
-Choose your Edge101 device from the **Active device** dropdown. The list is populated automatically from discovered devices in your Home Assistant instance.
-
-If no devices appear:
-- Ensure your Edge101 is powered on and connected to WiFi.
-- Check that ESPHome can see the device (Settings > Devices > ESPHome).
-- Wait for the next discovery cycle (default: 60 seconds).
-
-## Trigger a Build
-
-Once the proxy backend is configured and a device is selected:
-
-1. Use the **Build Production Firmware** button in the PVAutonomy integration panel.
-2. The build is dispatched to GitHub Actions via the proxy.
-3. **Expected build time: 8-10 minutes.**
-4. Progress is shown in the integration status sensor (`sensor.pvautonomy_ops_status`).
-
-### Build lifecycle
+This release does not build or install firmware for you. Setting up a new
+controller therefore runs the wizard **twice**: once to prepare the device
+configuration, and — after you have built and flashed the firmware yourself —
+once more to adopt the running controller.
 
 ```
-Queued  -->  Compiling  -->  Success  -->  Ready to Flash
-                              |
-                              v
-                           Failed (check logs)
+Set up a new controller  →  build and flash with ESPHome  →  Adopt a running controller
+      (wizard, part 1)        (LOCAL-ESPHOME-SELF-BUILD.md)        (wizard, part 2)
 ```
 
-## Flash Firmware
+Start: **Settings → Devices & Services → Add Integration → PVAutonomy.**
 
-After a successful build:
+---
 
-1. The firmware artifact is downloaded and verified (SHA-256 hash check).
-2. Use the **Flash Production Firmware** button.
-3. The device will reboot after flashing (~30 seconds offline).
-4. Verify the device comes back online with the new firmware.
+## Part 1 — Set up a new controller
 
-## Other Options
+The first screen, **PVAutonomy Setup**, offers two entries. Choose
+**Set up a new controller**.
 
-| Option | Description |
-|--------|-------------|
-| **Poll interval** | How often device status is refreshed (10-300 sec) |
-| **Firmware channel** | `stable` for production, `beta` for testing |
-| **Minimum firmware size** | Reject firmware smaller than this (stub protection, default: 300 KB) |
-| **Require gates** | If enabled, readiness gates must pass before flashing |
-| **Gates freshness** | How long gate results remain valid (1-60 min) |
+1. **Build Firmware with ESPHome** — explains what follows. Submit it.
+2. **Select Model** — *Growatt SPH10K* or *Growatt MIC600*. (A manufacturer
+   screen exists, but it is skipped while Growatt is the only manufacturer.)
+3. **Device Location** — a location (*Haus / Home*, *Garage*,
+   *Garten / Garden*, or *Custom...* with your own name of at least 2
+   characters) and a **device number** from 1 to 10. Together with the
+   model they form the controller's name, for example `sph10k-home-02`.
+   Write these values down: you enter the same ones again in part 2.
+4. **Device already exists** — appears only if a device with the same name is
+   already in Home Assistant. Continuing means building firmware for exactly
+   that device; for a new device, go back and choose a different location or
+   number.
+5. **Wi-Fi for the device** — appears only if your ESPHome `secrets.yaml`
+   has no `wifi_ssid` or no `wifi_password` yet. Enter the name and password
+   of your 2.4 GHz network. See "What the wizard writes" below.
+6. **Ready to Flash** — the device configuration has been written to
+   `/config/esphome/<name>.yaml`, and the ESPHome Device Builder already lists
+   it. Submitting this screen ends the wizard with the message
+   *"Local ESPHome YAML exported. Build and flash the device with ESPHome,
+   then return to register the running device."* No PVAutonomy entry exists
+   yet at this point; that is expected.
 
-## Next Steps
+Now build and flash the firmware:
+[LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md). Come back when
+the controller runs and Home Assistant has **added** it in the ESPHome
+integration (not only discovered it).
 
-- [Troubleshooting](TROUBLESHOOTING.md) if something goes wrong
-- [Security](SECURITY.md) to understand what data is sent
-- [FAQ](FAQ.md) for common questions
+### What the wizard writes
+
+Before it writes the device configuration, the wizard makes sure that your
+ESPHome `secrets.yaml` (`/config/esphome/secrets.yaml`) holds the four
+entries the configuration refers to:
+
+| Entry | Where the value comes from |
+|---|---|
+| `wifi_ssid` | what you typed, stored exactly as entered |
+| `wifi_password` | what you typed, stored exactly as entered |
+| `api_encryption_key_<name>` | generated on your Home Assistant: 32 random bytes, Base64 |
+| `ota_password_<name>` | generated on your Home Assistant: 16 random bytes, 32 hex characters |
+
+- An entry that is already in the file is never changed, regenerated or
+  overwritten. If all four are present, the file is not written at all.
+- New entries are appended below a comment line; the rest of the file keeps
+  its exact content, comments and formatting.
+- The file is kept readable by its owner only (mode `0600`).
+- The wizard logs the names of the entries it adds, never their values.
+- The two generated entries carry the controller's name, so every controller
+  gets its own pair. The two Wi-Fi entries are shared by all controllers on
+  your network.
+
+The device configuration itself contains no credential value: it refers to
+these four entries with `!secret`.
+
+The Wi-Fi screen accepts a network name of at most 32 characters without
+control characters, and a password of 8 to 63 printable ASCII characters. For
+an open network, or a password outside that range, write the two Wi-Fi
+entries into `secrets.yaml` yourself before you run the wizard; it then uses
+them as they are.
+
+---
+
+## Part 2 — Adopt a running controller
+
+Start the wizard again and choose **Adopt a running controller**.
+
+1. **Select Model** and **Device Location** — the same values as in part 1.
+2. **Select Target Device** — the ESPHome devices Home Assistant knows that
+   have a MAC address. Choose your controller. The list marks a controller
+   with *— re-flash* when PVAutonomy already knows it: from a PVAutonomy
+   entry, or from an earlier setup whose entry has since been removed. If a
+   PVAutonomy entry is bound to it, it is not adopted a second time: with the
+   same location and number the setup ends with *"This device is already
+   configured."*; with a different location or number the target screen
+   shows *"Device slug is fixed after first install. …"*. A controller known
+   only from an earlier setup is adopted as usual; with different values,
+   *Device Already Known* asks first.
+3. **Device Already Known** — appears only if no PVAutonomy entry is bound to
+   this controller, but PVAutonomy still knows it from an earlier setup under
+   a different model, location or number. **Relocate** moves it to the new
+   values; **Cancel** stops the setup.
+4. **Adopt Running Device** — shows what will be registered. Submit it.
+   Before it registers the controller, the wizard checks that the device
+   offers the entities the generated firmware provides, and derives the
+   feature level from them. No firmware is built, installed, or reflashed.
+
+After that, the controller appears under **Settings → Devices & Services →
+PVAutonomy**, and a device dashboard is created in the background. The
+System Dashboard — **PVAutonomy** in the sidebar — lists your controllers;
+its **Maintenance** view has a **Refresh device dashboard** button for each of
+them.
+
+---
+
+## Options
+
+**Settings → Devices & Services → PVAutonomy → Configure** offers:
+
+| Entry | What it does |
+|---|---|
+| **Settings** | *Active device* and *Poll interval (seconds)* |
+| **Relocate Device** | change the location and number of this controller |
+| **Clean Up Old Entities** | find this controller's entities that still carry an earlier `<model>_<site>_<nn>` prefix, then disable or delete them |
+| **System Dashboard** | remove the System Dashboard, or bring it back |
+
+---
+
+If a screen shows a message you do not expect, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).

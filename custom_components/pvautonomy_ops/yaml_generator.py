@@ -127,6 +127,25 @@ def _effective_tier(selected_tier: str, map_confirmed: bool) -> str:
 # (bundle-only, fail-closed) — see defs_paths.py.
 
 
+class _LiteralStr(str):
+    """A string that must render as a YAML literal block (``|-``)."""
+
+
+def _literal_representer(dumper: yaml.Dumper, data: _LiteralStr):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="|")
+
+
+class _PvaDumper(yaml.Dumper):
+    """Default dumper plus literal-block rendering for :class:`_LiteralStr`.
+
+    Behaviour is identical to ``yaml.Dumper`` for every other type, so adding
+    it changes no existing output.
+    """
+
+
+_PvaDumper.add_representer(_LiteralStr, _literal_representer)
+
+
 class YamlGenerationError(Exception):
     """YAML generation failed."""
 
@@ -195,8 +214,8 @@ def generate_device_yaml(
         # 4. Inject substitutions (API key, OTA password via !secret)
         _inject_substitutions(base, node_name, registry, mac_suffix)
 
-        # 5. Production WiFi (NVS-based, AP fallback)
-        _add_production_wifi(base)
+        # 5. Production network (own-network Wi-Fi via !secret) + logging
+        _apply_production_network_and_logging(base)
 
         # 6. Modbus UART
         _add_modbus_uart(base, registry)
@@ -212,9 +231,13 @@ def generate_device_yaml(
             map_confirmed=map_confirmed,
         )
 
+        # 8b. Read-back transactions for controls that opt in (PD-17/C2)
+        _add_readback_transactions(base, registry)
+
         # 9. Render to YAML string
         yaml_content = yaml.dump(
-            base, default_flow_style=False, sort_keys=False, allow_unicode=True
+            base, Dumper=_PvaDumper, default_flow_style=False,
+            sort_keys=False, allow_unicode=True
         )
 
         # 10. Post-render: __SECRET_xxx__ → !secret xxx
@@ -294,6 +317,35 @@ def _load_registry(
     return data
 
 
+#: Lowest ESPHome that can compile generated device YAML. Two requirements
+#: set it, and the higher one wins:
+#:
+#: * ``modbus.turnaround_time`` for Modbus pacing, which ESPHome before
+#:   2026.3 rejects as an invalid option (issues #259, PR #264);
+#: * the read-back transaction (PD-17/C2), whose ``on_command_sent`` lambda
+#:   calls ``ModbusCommandItem::create_read_command`` with
+#:   ``modbus::EntityType`` and hands the response to
+#:   ``parse_and_publish(std::span<const uint8_t>)``. Before 2026.8 those are
+#:   ``ModbusRegisterType`` and ``const std::vector<uint8_t> &``, so the
+#:   generated lambda does not compile at all.
+#:
+#: Kept in step with ``esphome_min_version`` in
+#: ``firmware-defs/defs-manifest.json``, ``min_version`` in the production
+#: base, and the standalone generator.
+ESPHOME_MIN_VERSION = "2026.8.0"
+
+#: Lowest ESPHome offering the read-back API used by
+#: :func:`_add_readback_transactions`. Declaring a floor below this would ship
+#: YAML that cannot compile, so the two are coupled fail-closed at generation
+#: time rather than trusted to stay in step by hand.
+READBACK_MIN_ESPHOME = "2026.8.0"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """``"2026.8.0"`` -> ``(2026, 8, 0)`` for ordering comparisons."""
+    return tuple(int(part) for part in v.split("."))
+
+
 def _update_device_info(
     config: dict, device_name: str, registry: dict, version: str | None
 ) -> None:
@@ -303,6 +355,13 @@ def _update_device_info(
         config["esphome"] = {}
     config["esphome"]["name"] = device_name
     config["esphome"]["name_add_mac_suffix"] = False
+    # Fail closed, same rule as _apply_modbus_pacing: set unconditionally so a
+    # base template without the key — or with a lower one — cannot produce
+    # output that compiles on an ESPHome too old for modbus.turnaround_time
+    # (issues #259, PR #264). Without it the user meets
+    # "[turnaround_time] is an invalid option" with nothing pointing at the
+    # version; with it ESPHome names the floor itself. Issue #270.
+    config["esphome"]["min_version"] = ESPHOME_MIN_VERSION
     # TASK-20260522B: do NOT bake an absolute build_path. This YAML is
     # authoritative under build_contract=yaml_authority and shipped verbatim
     # to the remote GitHub Actions runner, where an HAOS/add-on path like
@@ -364,13 +423,21 @@ def _inject_substitutions(
             ) from exc
         config["api"]["encryption"]["key"] = f"__SECRET_edge101_api_key_{suffix}__"
     else:
-        config["api"]["encryption"]["key"] = "__SECRET_api_encryption_key__"
+        # Self-build path (#240): no MAC is known here, but the node name is,
+        # and it is unique within an installation. Binding the secret names to
+        # it keeps two self-built devices from resolving the *same* API key
+        # and the *same* OTA password out of one shared secrets.yaml — which
+        # is what the generic names used to do, and what the Alpha guide had
+        # to warn about.
+        config["api"]["encryption"]["key"] = (
+            f"__SECRET_api_encryption_key_{device_name}__"
+        )
 
     # OTA password (device-specific via !secret)
     ota_secret = (
         f"__SECRET_edge101_ota_password_{suffix}__"
         if suffix
-        else "__SECRET_ota_password__"
+        else f"__SECRET_ota_password_{device_name}__"
     )
 
     if not config.get("ota"):
@@ -388,15 +455,38 @@ def _inject_substitutions(
         config["ota"]["password"] = ota_secret
 
 
-def _add_production_wifi(config: dict) -> None:
-    """Production WiFi: AP + Captive Portal (NVS Station credentials from Factory)."""
-    config["wifi"] = {
-        "ap": {"ssid": "PVA-Edge", "password": "${wifi_fallback_password}"}
-    }
-    config["captive_portal"] = None
+def _apply_production_network_and_logging(config: dict) -> None:
+    """Production network + logging for the generated device YAML.
 
-    for key in ("improv_serial",):
+    Wi-Fi follows the ESPHome convention: the device joins the user's own
+    network using ``!secret wifi_ssid`` / ``!secret wifi_password`` from their
+    own ESPHome ``secrets.yaml``. The generator emits *references* only and
+    never a credential value.
+
+    Deliberately NOT emitted (ADR-0005 / PD-14; master-todo F-19):
+
+    * ``wifi.ap`` — a fallback AP keyed with a shared, class-wide password is
+      a universal default credential in every released image;
+    * ``captive_portal`` — an unauthenticated credential-submit surface;
+    * ``web_server`` — an unauthenticated read/control surface on port 80.
+
+    This function is the primary site for that guarantee. Cleaning the base
+    templates alone is **not** sufficient, because it rewrites ``wifi:``
+    unconditionally and previously injected the fallback AP regardless of what
+    the base contained. The removals below are therefore fail-closed: a stale
+    or third-party base template cannot reintroduce those surfaces, nor the
+    ``wifi_fallback_password`` substitution literal, into generated output.
+    """
+    config["wifi"] = {
+        "ssid": "__SECRET_wifi_ssid__",
+        "password": "__SECRET_wifi_password__",
+    }
+
+    for key in ("captive_portal", "web_server", "improv_serial"):
         config.pop(key, None)
+
+    if isinstance(config.get("substitutions"), dict):
+        config["substitutions"].pop("wifi_fallback_password", None)
 
     # Defensive: bare `button:` in YAML → None, not a list
     if "button" in config and isinstance(config.get("button"), list):
@@ -453,10 +543,33 @@ def _add_modbus_uart(config: dict, registry: dict) -> None:
 
 
 def _add_modbus_controller(config: dict, registry: dict) -> None:
-    """Add Modbus controller."""
+    """Add Modbus controller.
+
+    Command spacing lives on the ``modbus`` component: ESPHome 2026.8 ignores
+    ``modbus_controller.command_throttle`` (removal announced for 2027.2), so
+    a config still carrying it silently paces at the 600 ms ``modbus`` default
+    — measured twice as too slow for the 18-transaction SPH cycle against
+    ``update_interval: 10s`` (baseline 2026-08-25: 10.80 s; P1b bench
+    2026-08-26: 11,694 ms), while the deployed 200 ms passes with headroom
+    (3.65 s / 4,531 ms). Issue #259. Bench-validated 2026-08-31: pacing lands
+    as predicted (248 ms gap incl. RTT); the remaining cycle-budget question
+    is the 2026.8 span refactor's 29-transaction poll plan (issue #265), not
+    this pacing value.
+
+    This function is the primary site (compare
+    _apply_production_network_and_logging): it overwrites both blocks
+    wholesale, so a stale base template that still carries command_throttle
+    cannot leak it into generated output, and turnaround_time is always
+    emitted.
+    """
     modbus_config = _get_protocol_config(registry)
     config["modbus"] = [
-        {"id": "modbus1", "uart_id": "uart_modbus", "flow_control_pin": 16}
+        {
+            "id": "modbus1",
+            "uart_id": "uart_modbus",
+            "flow_control_pin": 16,
+            "turnaround_time": "200ms",
+        }
     ]
     config["modbus_controller"] = [
         {
@@ -464,7 +577,6 @@ def _add_modbus_controller(config: dict, registry: dict) -> None:
             "address": modbus_config.get("slave_address", 1),
             "modbus_id": "modbus1",
             "update_interval": "10s",
-            "command_throttle": "200ms",
         }
     ]
 
@@ -707,6 +819,139 @@ def _add_registers(
             select_entry.setdefault("skip_updates", sel.get("skip_updates", 999))
             select_entry.setdefault("force_new_range", sel.get("force_new_range", True))
         config["select"].append(select_entry)
+
+
+# Buckets that can carry a read-back opt-in, as (generated-config key, registry key).
+_READBACK_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("number", "numbers"),
+    ("switch", "switches"),
+    ("select", "selects"),
+)
+
+# Re-read delays after a write, in milliseconds. The first lands after the
+# inverter has had time to apply the value, the second survives one retry of
+# the write command.
+_READBACK_DELAYS_MS: tuple[int, ...] = (700, 2500)
+
+
+def _readback_lambda_block(address: int, entity_id: str) -> str:
+    """C++ for one control: re-read ``address`` twice after a write to it.
+
+    The ``function_code`` filter admits only FC16/FC06 (writes). Our own
+    re-read is FC03, so it cannot re-trigger this hook — no feedback loop.
+    The timeouts are *named* per address, so a retry of the same write
+    re-arms the pending re-read instead of stacking a second one.
+    ``id(inverter)`` is passed as-is, never ``&id(inverter)``: ESPHome's
+    lambda rewriting (``cpp_generator.py`` ``process_lambda``, 2026.8.2)
+    replaces a bare ``id(x)`` for a component with the pointer variable ``x``
+    itself, so ``&id(x)`` is a pointer-to-pointer and does not compile.
+    """
+    return (
+        f"if ((function_code == 16 || function_code == 6) && address == {address}) {{\n"
+        f"  auto rb = []() {{\n"
+        f"    id(inverter).queue_command(esphome::modbus_controller::ModbusCommandItem::create_read_command(\n"
+        f"        id(inverter), esphome::modbus::EntityType::HOLDING, {address}, 1,\n"
+        f"        [](esphome::modbus::EntityType, uint16_t, std::span<const uint8_t> data) {{ id({entity_id}).parse_and_publish(data); }}));\n"
+        f"  }};\n"
+        f"  App.scheduler.set_timeout(id(inverter), \"rb1_{address}\", {_READBACK_DELAYS_MS[0]}, rb);\n"
+        f"  App.scheduler.set_timeout(id(inverter), \"rb2_{address}\", {_READBACK_DELAYS_MS[1]}, rb);\n"
+        f"}}\n"
+    )
+
+
+def _add_readback_transactions(config: dict, registry: dict) -> None:
+    """Emit ``on_command_sent`` re-reads for controls opting in (PD-17/C2).
+
+    ESPHome's ``modbus_number`` publishes the value it just wrote without ever
+    confirming it (``modbus_number.cpp:88``, ESPHome 2026.8.1). Combined with
+    the ``skip_updates`` write guardrail, a control therefore displays its own
+    last write for hours — which is how a write that never took effect looked
+    like a success, and how the counter-check in #299 became impossible.
+
+    A registry entry with ``readback_after_write: true`` gets a hook that
+    re-reads its register (FC03) twice after every write and republishes the
+    device's answer, so the entity shows what the inverter holds.
+
+    Runs *after* :func:`_add_registers`, so the tier, version and
+    ``generator_skip`` gates have already decided what exists: this function
+    only ever hooks entities that were actually emitted.
+    """
+    regs = registry.get("registers")
+    if not isinstance(regs, dict):
+        return
+
+    blocks: list[str] = []
+    for cfg_key, reg_key in _READBACK_BUCKETS:
+        emitted = config.get(cfg_key)
+        if not isinstance(emitted, list):
+            continue
+        by_id = {
+            e.get("id"): e
+            for e in emitted
+            if isinstance(e, dict) and e.get("id")
+        }
+        raw_entries = regs.get(reg_key)
+        entries = raw_entries if isinstance(raw_entries, list) else []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("readback_after_write"):
+                continue
+            entity_id = entry.get("id")
+            emitted_entry = by_id.get(entity_id)
+            if emitted_entry is None:
+                # Gated out by tier/version/generator_skip — nothing to hook.
+                _LOGGER.debug(
+                    "Read-back: %s opted in but was not emitted — skipping", entity_id
+                )
+                continue
+            # Selects never carry register_type in the generated YAML (it implies
+            # holding); fall back to the registry's own value for them.
+            reg_type = emitted_entry.get(
+                "register_type", entry.get("register_type", "holding")
+            )
+            if str(reg_type).lower() != "holding":
+                raise YamlGenerationError(
+                    f"readback_after_write is only valid on holding registers, "
+                    f"but '{entity_id}' is register_type '{reg_type}'"
+                )
+            # The re-read asks for exactly (address, 1). Without force_new_range
+            # the entity may share a Modbus range with its neighbours, and the
+            # single-register answer would not map back onto it. Fail closed.
+            if emitted_entry.get("force_new_range") is not True:
+                raise YamlGenerationError(
+                    f"readback_after_write requires force_new_range: true, "
+                    f"but '{entity_id}' has "
+                    f"force_new_range={emitted_entry.get('force_new_range')!r}"
+                )
+            blocks.append(
+                _readback_lambda_block(int(emitted_entry["address"]), str(entity_id))
+            )
+
+    if not blocks:
+        # No opt-in entity emitted — leave the controller block untouched.
+        return
+
+    # The hook compiles only against the 2026.8 modbus_controller API. If the
+    # declared floor ever drops below it, generation stops here rather than
+    # shipping YAML whose lambda cannot build on the version we told the user
+    # to install.
+    if _version_tuple(ESPHOME_MIN_VERSION) < _version_tuple(READBACK_MIN_ESPHOME):
+        raise YamlGenerationError(
+            f"read-back needs ESPHome >= {READBACK_MIN_ESPHOME}, but the "
+            f"declared floor is {ESPHOME_MIN_VERSION}"
+        )
+
+    controllers = config.get("modbus_controller")
+    if not (isinstance(controllers, list) and controllers
+            and isinstance(controllers[0], dict)):
+        raise YamlGenerationError(
+            "readback_after_write requested but no modbus_controller to attach it to"
+        )
+    # rstrip: a body without a trailing newline renders as ``|-`` (strip
+    # chomping), which is the conventional ESPHome lambda form.
+    controllers[0]["on_command_sent"] = {
+        "then": [{"lambda": _LiteralStr("".join(blocks).rstrip("\n"))}]
+    }
+    _LOGGER.info("Read-back hooks emitted for %d control(s)", len(blocks))
 
 
 def _emit_derived_watt_sensors(

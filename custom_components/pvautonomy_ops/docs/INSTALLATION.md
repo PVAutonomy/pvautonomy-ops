@@ -1,156 +1,119 @@
 # Installation
 
-## Prerequisites
+PVAutonomy is a Home Assistant integration for a DFRobot Edge101 controller
+(DFR0886) that connects to a Growatt inverter over RS485/Modbus. This release
+is a **Community Alpha**: experimental, for technically capable Home
+Assistant users, without any warranty or support commitment.
 
-- A supported Home Assistant version. The package metadata sets the minimum
-  Home Assistant version; treat that as the supported floor. The current
-  release (`pvautonomy_ops` 0.4.16) was validated on Home Assistant Core
-  2026.6.x — that is the **validated test environment**, not necessarily a new
-  hard minimum.
-- For normal customers: the **PVAutonomy Installer/Updater add-on** (no HACS
-  required). For developers/power-users: **HACS**.
+This release does not build or install firmware for you. You build and flash
+the controller's firmware yourself with ESPHome, and the integration helps you
+prepare it and then adopts the running controller.
 
-## Two supported installation paths
-
-Both paths install the **same** `pvautonomy_ops` 0.4.16 release artifact (same
-version, same SHA). Pick one:
-
-### 1. Customer / app path — PVAutonomy Installer/Updater add-on
-
-The supported path for normal customers.
-
-1. Install/enable the **PVAutonomy Installer/Updater add-on**.
-2. Set the channel to **`stable`**.
-3. The add-on installs `pvautonomy_ops` 0.4.16 into
-   `/config/custom_components/pvautonomy_ops/`.
-4. **Restart Home Assistant.**
-
-HACS is **not** required for this path.
-
-### 2. Developer / HACS path
-
-Suitable for developers and power-users.
-
-1. Open **HACS** in the Home Assistant sidebar.
-2. Go to **Integrations**.
-3. Three-dot menu (top right) → **Custom repositories**.
-4. Enter:
-   - **Repository:** `PVAutonomy/pvautonomy-ops`
-   - **Category:** Integration
-5. Click **Add**.
-6. Find **PVAutonomy** in the list and click **Download** (stable, 0.4.16).
-7. **Restart Home Assistant.**
-
-## What you do NOT need
-
-- **No firmware definitions under `/config`.** Firmware definitions ship
-  **bundled in the integration release** under
-  `custom_components/pvautonomy_ops/data/firmware_defs/`. You do not need any
-  files under `/config/inverter-registry` or `/config/esphome` — those are no
-  longer customer/product distribution paths.
-- **No pip dependency resolution at install time** (`manifest.json` declares
-  `requirements = []`; `pyhpke` is vendored in-tree).
-
-> **Managed Build Service access is separate.** Installing the integration
-> (via either path) does **not** by itself grant access to the Managed Build
-> Service. Triggering firmware builds requires a PVAutonomy Managed Build
-> Service API key (shown as `pva_...`), provisioned by your PVAutonomy
-> provider. See [Setup](SETUP-WIZARD.md) and [Security](SECURITY.md).
-
-## Add the Integration
-
-1. Go to **Settings > Devices & Services > Add Integration**.
-2. Search for **PVAutonomy**.
-3. Enter a name (default: "PVAutonomy") and poll interval (default: 60 seconds).
-4. Click **Submit**.
-
-The integration is now active. Continue with [Setup](SETUP-WIZARD.md) to
-configure the build backend.
-
-## Update
-
-- **Installer/Updater add-on (stable):** updates `pvautonomy_ops` to the
-  current stable release; restart Home Assistant afterward.
-- **HACS:** HACS notifies you when a new version is available. Click **Update**
-  in HACS and restart Home Assistant.
-
-## Uninstall
-
-1. Go to **Settings > Devices & Services**.
-2. Find **PVAutonomy** and click the three-dot menu > **Delete**.
-3. Remove the integration files via the path you installed with (HACS >
-   Integrations > Remove, or the Installer/Updater add-on).
-4. Restart Home Assistant.
+What this release does not claim, and how to report a security issue, is
+stated in the project README and security policy:
+[README](https://github.com/PVAutonomy/pvautonomy-ops) ·
+[SECURITY.md](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md).
 
 ---
 
-# Installation (Deutsch)
+## What you need
 
-## Voraussetzungen
+| | |
+|---|---|
+| Controller | DFRobot Edge101 (DFR0886) |
+| Inverter | Growatt SPH10K or Growatt MIC600 (see below) |
+| Home Assistant | with the **ESPHome Device Builder** add-on, or the ESPHome command-line tool on a computer to which you copy the device configuration and its four `secrets.yaml` entries (see the self-build guide, step 9) |
+| ESPHome | **2026.8.0 or newer** — the generated device configuration requires it |
+| Browser | a Chromium-based browser (Chrome, Edge, Chromium, Brave) if you flash from the Device Builder |
+| Cable | a USB **data** cable for the first flash |
+| Network | a 2.4 GHz Wi-Fi network — the controller has no 5 GHz radio |
 
-- Eine unterstützte Home-Assistant-Version. Die Mindestversion steht in den
-  Paket-Metadaten und gilt als unterstützte Untergrenze. Das aktuelle Release
-  (`pvautonomy_ops` 0.4.16) wurde mit Home Assistant Core 2026.6.x validiert —
-  das ist die **validierte Testumgebung**, nicht zwingend eine neue
-  Mindestanforderung.
-- Für normale Kunden: das **PVAutonomy Installer/Updater Add-on** (kein HACS
-  nötig). Für Entwickler/Power-User: **HACS**.
+**Inverter status in this release:**
 
-## Zwei unterstützte Installationspfade
+- **Growatt SPH10K** — generated firmware has run on an Edge101 connected to
+  an SPH10K in a bench setup.
+- **Growatt MIC600** — supported by the configuration generator; not yet
+  validated on hardware with this release.
 
-Beide Pfade installieren dasselbe `pvautonomy_ops` 0.4.16 Release-Artefakt
-(gleiche Version, gleicher SHA). Einen wählen:
+No PVAutonomy account, key or online service is needed for anything in this
+documentation.
 
-### 1. Kunden-/App-Pfad — PVAutonomy Installer/Updater Add-on
+---
 
-Der unterstützte Pfad für normale Kunden.
+## Install the integration
 
-1. **PVAutonomy Installer/Updater Add-on** installieren/aktivieren.
-2. Channel auf **`stable`** setzen.
-3. Das Add-on installiert `pvautonomy_ops` 0.4.16 nach
+### With HACS (custom repository)
+
+1. In Home Assistant open **HACS**.
+2. Open the three-dot menu → **Custom repositories**.
+3. Repository: `https://github.com/PVAutonomy/pvautonomy-ops`, type:
+   **Integration**. Add it.
+4. Search for **PVAutonomy**, open it and choose **Download**.
+5. Restart Home Assistant.
+
+### By hand
+
+1. Open the release you want to install (normally the latest) on
+   [the releases page](https://github.com/PVAutonomy/pvautonomy-ops/releases)
+   and download **Source code (zip)** under **Assets**. GitHub builds this
+   archive from the release tag; you do not need the other entries there.
+2. Unpack the archive. It holds the whole repository in one folder. Copy the
+   folder `custom_components/pvautonomy_ops/` from it into
+   `/config/custom_components/` of your Home Assistant, so that
+   `/config/custom_components/pvautonomy_ops/manifest.json` exists.
+3. Restart Home Assistant.
+
+---
+
+## Add the integration
+
+**Settings → Devices & Services → Add Integration → PVAutonomy.**
+
+The setup offers two entries:
+
+- **Set up a new controller** — prepares the device configuration and the
+  credentials it needs; you then build and flash the firmware yourself.
+- **Adopt a running controller** — registers a controller that already runs
+  the generated firmware. Nothing is built, installed, or reflashed.
+
+For a new controller you use both, in this order. The whole path is described
+in [SETUP-WIZARD.md](SETUP-WIZARD.md) and, for the build and flash in the
+middle, in [LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md).
+
+---
+
+## Update
+
+Update through HACS, or replace the folder by hand as above, then restart
+Home Assistant. Read the release notes on
+[the releases page](https://github.com/PVAutonomy/pvautonomy-ops/releases)
+before you update: they list what changed, including anything that was
+removed.
+
+An update of the integration does not change the firmware on your controller.
+If a release needs new firmware, its release notes say so, and you rebuild
+and reflash it yourself as described in the self-build guide.
+
+---
+
+## Uninstall
+
+1. **Settings → Devices & Services → PVAutonomy** → remove each entry.
+2. Remove the integration in HACS, or delete
    `/config/custom_components/pvautonomy_ops/`.
-4. **Home Assistant neu starten.**
+3. Restart Home Assistant.
 
-HACS ist für diesen Pfad **nicht** erforderlich.
+The device configuration in `/config/esphome/` and the entries in your
+ESPHome `secrets.yaml` belong to your ESPHome setup. Remove them yourself if
+you no longer need them.
 
-### 2. Entwickler-/HACS-Pfad
+---
 
-Geeignet für Entwickler und Power-User.
+## Next
 
-1. **HACS** in der Seitenleiste öffnen.
-2. Zu **Integrationen** navigieren.
-3. Drei-Punkte-Menü (oben rechts) → **Benutzerdefinierte Repositories**.
-4. Eingeben:
-   - **Repository:** `PVAutonomy/pvautonomy-ops`
-   - **Kategorie:** Integration
-5. **Hinzufügen** klicken.
-6. **PVAutonomy** in der Liste finden und **Herunterladen** (stable, 0.4.16).
-7. **Home Assistant neu starten.**
-
-## Was NICHT nötig ist
-
-- **Keine Firmware-Definitionen unter `/config`.** Firmware-Definitionen werden
-  **gebündelt im Integration-Release** unter
-  `custom_components/pvautonomy_ops/data/firmware_defs/` ausgeliefert. Es werden
-  keine Dateien unter `/config/inverter-registry` oder `/config/esphome`
-  benötigt — diese sind keine Kunden-/Produkt-Distributionspfade mehr.
-- **Keine pip-Abhängigkeitsauflösung zur Installationszeit** (`manifest.json`
-  `requirements = []`; `pyhpke` ist in-tree vendored).
-
-> **Managed-Build-Service-Zugang ist separat.** Die Installation der Integration
-> (über einen der beiden Pfade) gewährt **nicht** automatisch Zugang zum
-> Managed Build Service. Firmware-Builds benötigen einen PVAutonomy
-> Managed-Build-Service-API-Key (als `pva_...` dargestellt), der vom
-> PVAutonomy-Anbieter bereitgestellt wird. Siehe [Einrichtung](SETUP-WIZARD.md)
-> und [Security](SECURITY.md).
-
-## Integration hinzufügen
-
-1. **Einstellungen > Geräte & Dienste > Integration hinzufügen**.
-2. Nach **PVAutonomy** suchen.
-3. Name eingeben (Standard: "PVAutonomy") und Abfrageintervall (Standard: 60
-   Sekunden).
-4. **Absenden** klicken.
-
-Die Integration ist jetzt aktiv. Weiter mit [Einrichtung](SETUP-WIZARD.md) für
-die Build-Backend-Konfiguration.
+- [SETUP-WIZARD.md](SETUP-WIZARD.md) — the setup, screen by screen
+- [LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md) — building and
+  flashing the firmware
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — messages you may see, and what
+  to do
+- [FAQ.md](FAQ.md)

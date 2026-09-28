@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
+from . import const as _const
 from .const import (
     CONF_MAP_CONFIRMED,
     CONF_MODBUS_VERSION,
@@ -110,15 +111,17 @@ async def async_setup_entry(
 
     entry_id = entry.entry_id
 
-    async_add_entities(
-        [
-            PVAutonomyOpsDiscoverButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
-            PVAutonomyOpsRestartButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
-            PVAutonomyOpsRunGatesButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
-            PVAutonomyOpsFlashButton(hass, operation_runner, input_reader, runtime_config, entry_id=entry_id, is_legacy=is_legacy),
-        ],
-        True,
-    )
+    entities: list[ButtonEntity] = [
+        PVAutonomyOpsDiscoverButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
+        PVAutonomyOpsRestartButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
+        PVAutonomyOpsRunGatesButton(hass, operation_runner, input_reader, entry_id=entry_id, is_legacy=is_legacy),
+    ]
+    # PD-16 / PD-18 (A-4a1): the Flash button runs the Managed Build.
+    if _const.managed_paths_enabled():
+        entities.append(
+            PVAutonomyOpsFlashButton(hass, operation_runner, input_reader, runtime_config, entry_id=entry_id, is_legacy=is_legacy)
+        )
+    async_add_entities(entities, True)
 
 
 async def async_setup_platform(
@@ -138,15 +141,17 @@ async def async_setup_platform(
     entry_id = entry_data.get("entry", None)
     entry_id = entry_id.entry_id if entry_id else None
 
-    async_add_entities(
-        [
-            PVAutonomyOpsDiscoverButton(hass, operation_runner, input_reader, entry_id=entry_id),
-            PVAutonomyOpsRestartButton(hass, operation_runner, input_reader, entry_id=entry_id),
-            PVAutonomyOpsRunGatesButton(hass, operation_runner, input_reader, entry_id=entry_id),
-            PVAutonomyOpsFlashButton(hass, operation_runner, input_reader, runtime_config, entry_id=entry_id),
-        ],
-        True,
-    )
+    entities: list[ButtonEntity] = [
+        PVAutonomyOpsDiscoverButton(hass, operation_runner, input_reader, entry_id=entry_id),
+        PVAutonomyOpsRestartButton(hass, operation_runner, input_reader, entry_id=entry_id),
+        PVAutonomyOpsRunGatesButton(hass, operation_runner, input_reader, entry_id=entry_id),
+    ]
+    # PD-16 / PD-18 (A-4a1): the Flash button runs the Managed Build.
+    if _const.managed_paths_enabled():
+        entities.append(
+            PVAutonomyOpsFlashButton(hass, operation_runner, input_reader, runtime_config, entry_id=entry_id)
+        )
+    async_add_entities(entities, True)
 
 
 class PVAutonomyOpsDiscoverButton(ButtonEntity):
