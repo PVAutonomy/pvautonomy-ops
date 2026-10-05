@@ -282,6 +282,11 @@ def get_extended_control_names(
 DEFAULT_NAME = "PVAutonomy"
 
 
+def _normalize_controller_name(value: str) -> str:
+    """Normalise a controller name for comparison (#278)."""
+    return value.strip().lower().replace("_", "-")
+
+
 def _resolve_slug_from_esphome(hass, ha_device_id: str) -> str | None:
     """Resolve device slug from ESPHome config entry (legacy fallback)."""
     dev_reg = dr.async_get(hass)
@@ -400,6 +405,10 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # device WITHOUT any build/install/reflash. Set from the first-screen
         # menu; routes target_device → adopt_confirm instead of the build path.
         self._adopt_mode: bool = False
+        # #278: the ha_device_id for which the user chose "Adopt anyway" on the
+        # name warning, so the re-entered target_device step does not show it
+        # again for that device. Consumed on entry of target_device.
+        self._name_mismatch_acknowledged: str | None = None
         # Local ESPHome YAML export mode: True only when local_esphome is
         # selected (not adopt_direct). Both paths share BUILD_SERVICE_LOCAL_ESPHOME
         # but only local_esphome should route location → local_yaml_ready.
@@ -1101,6 +1110,85 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_adopt_confirm()
         return await self.async_step_tier_selection()
 
+    def _selected_controller_name(self) -> str | None:
+        """Return the name the selected controller calls itself, or ``None``.
+
+        Read from the ESPHome config entry of the selected HA device, field
+        ``device_name`` only. ``None`` — no ESPHome entry, no field, a value
+        that is not a non-empty ``str``, or any error while reading — means
+        the name is unknown (#278).
+
+        Conflicting names from multiple ESPHome entries are treated as unknown.
+        """
+        names: set[str] = set()
+        try:
+            device = dr.async_get(self.hass).async_get(self._ha_device_id)
+            if not device:
+                return None
+            for entry_id in device.config_entries:
+                entry = self.hass.config_entries.async_get_entry(entry_id)
+                if entry is None or entry.domain != "esphome":
+                    continue
+                name = entry.data.get("device_name")
+                if isinstance(name, str) and name.strip():
+                    names.add(name.strip())
+        except Exception:  # noqa: BLE001 — an unreadable name is "unknown"
+            return None
+        if len({_normalize_controller_name(name) for name in names}) != 1:
+            return None
+        return min(names)
+
+    def _adopt_name_differs(self) -> bool:
+        """Whether the selected controller's name differs from the computed one.
+
+        Compared case-insensitively, with ``_`` and ``-`` equal and outer
+        whitespace removed. An unknown name never differs (#278).
+        """
+        name = self._selected_controller_name()
+        if name is None:
+            return False
+
+        computed = compute_node_name(self._model_slug, self._site, self._number)
+        return _normalize_controller_name(name) != _normalize_controller_name(computed)
+
+    async def async_step_adopt_name_mismatch(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Warn that the selected controller is named differently (#278).
+
+        Shown in adopt mode only, from ``target_device`` after the binding
+        and before the relocate detection: ``confirm_relocate`` writes at once,
+        so cancelling here must come first. Cancel ends the flow before
+        anything is written; the menu changes no state.
+        """
+        return self.async_show_menu(
+            step_id="adopt_name_mismatch",
+            menu_options=[
+                "adopt_name_mismatch_cancel",
+                "adopt_name_mismatch_continue",
+            ],
+            description_placeholders={
+                "node_name": self._selected_controller_name() or "",
+                "device_slug": compute_node_name(
+                    self._model_slug, self._site, self._number
+                ),
+                "mac_suffix": self._mac_suffix or "",
+            },
+        )
+
+    async def async_step_adopt_name_mismatch_continue(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Continue after the name warning: run ``target_device`` as without it."""
+        self._name_mismatch_acknowledged = self._ha_device_id or None
+        return await self.async_step_target_device({"ha_device_id": self._ha_device_id})
+
+    async def async_step_adopt_name_mismatch_cancel(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Cancel from the name warning: nothing has been registered."""
+        return self.async_abort(reason="adopt_name_mismatch_cancelled")
+
     async def async_step_proxy(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -1470,6 +1558,12 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Scans the Device Registry for ESPHome devices with MAC connections.
         User selects the physical device to bind this config entry to.
         """
+        # #278: take over the acknowledgement of the name warning and clear it
+        # before any branch, error path or await: it counts once, for the one
+        # device it was given for.
+        acknowledged_for = self._name_mismatch_acknowledged
+        self._name_mismatch_acknowledged = None
+
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -1581,6 +1675,21 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         ),
                         errors=errors,
                     )
+
+                # #278: warn before anything can be written. The relocate
+                # question that follows writes at once, so the warning has to
+                # come first; "Adopt anyway" re-enters this step once.
+                acknowledged = (
+                    isinstance(acknowledged_for, str)
+                    and bool(acknowledged_for)
+                    and acknowledged_for == ha_device_id
+                )
+                if (
+                    self._adopt_mode
+                    and not acknowledged
+                    and self._adopt_name_differs()
+                ):
+                    return await self.async_step_adopt_name_mismatch()
 
                 # MAC conflict detection: check if MAC is already in metadata store
                 try:
@@ -2791,6 +2900,9 @@ class PVAutonomyOpsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 device_name=device_name,
                 display_title=self._display_name,
                 registry_file=self._registry_file,
+                # #279: the bound device, so the dashboard references the
+                # entity IDs Home Assistant registered for it.
+                ha_device_id=self._ha_device_id or None,
             )
             if created:
                 _LOGGER.info("Customer dashboard created for %s", device_name)

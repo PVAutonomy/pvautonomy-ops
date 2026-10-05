@@ -27,6 +27,7 @@ stated in the project README and security policy:
 | Browser | a Chromium-based browser (Chrome, Edge, Chromium, Brave) if you flash from the Device Builder |
 | Cable | a USB **data** cable for the first flash |
 | Network | a 2.4 GHz Wi-Fi network — the controller has no 5 GHz radio |
+| HACS | for the installation through HACS: [HACS](https://hacs.xyz) installed in Home Assistant. Without HACS, install by hand (below) |
 
 **Inverter status in this release:**
 
@@ -43,6 +44,11 @@ documentation.
 ## Install the integration
 
 ### With HACS (custom repository)
+
+HACS must already be installed; its own guide is on [hacs.xyz](https://hacs.xyz).
+The repository below is added **inside HACS**. The add-on store under
+**Settings → Add-ons** (called *Apps* in newer Home Assistant versions) does
+not accept it and reports that it is not a valid repository.
 
 1. In Home Assistant open **HACS**.
 2. Open the three-dot menu → **Custom repositories**.
@@ -99,9 +105,23 @@ and reflash it yourself as described in the self-build guide.
 ## Uninstall
 
 1. **Settings → Devices & Services → PVAutonomy** → remove each entry.
-2. Remove the integration in HACS, or delete
-   `/config/custom_components/pvautonomy_ops/`.
-3. Restart Home Assistant.
+2. Remove the dashboards PVAutonomy created. Removing the entries leaves
+   them in the sidebar. Under **Settings → Dashboards** delete the System
+   Dashboard **PVAutonomy** and the device dashboards named
+   **PVAutonomy - …**.
+3. Remove the integration in HACS, or delete the folder
+   `/config/custom_components/pvautonomy_ops/`. The File editor add-on
+   cannot delete a folder that still holds files. In a terminal (for
+   example the Terminal & SSH add-on) run:
+
+   ```
+   rm -rf /config/custom_components/pvautonomy_ops
+   ```
+
+   Check the path before you press Enter: the command deletes without
+   asking. In some terminal add-ons the folder is under `/homeassistant`
+   instead of `/config`.
+4. Restart Home Assistant.
 
 The device configuration in `/config/esphome/` and the entries in your
 ESPHome `secrets.yaml` belong to your ESPHome setup. Remove them yourself if

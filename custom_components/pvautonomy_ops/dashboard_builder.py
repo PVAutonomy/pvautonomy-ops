@@ -345,9 +345,137 @@ def _classify_entity(entry: dict[str, Any], bucket: str) -> str | None:
     return "status"
 
 
-def _entity_id(device_name: str, entry: dict[str, Any], domain: str) -> str:
-    """Build the HA entity_id for a registry entry."""
-    return f"{domain}.{device_name}_{entry['id']}_device"
+class _RegisteredId(str):
+    """A registered entity_id that remembers the ID built from the slug.
+
+    [#279] Which registry id a row is must not be recovered from the entity_id
+    it ends up with: one entity_id can be the registered ID of one entity and
+    the fallback ID of another row. The row therefore carries its identity
+    itself, as ``built`` — ``<domain>.<slug>_<registry-id>_device``. Pinning,
+    ordering, the optional AC phases, the MIC status mapping and the compact
+    labels read it through :func:`_built`. The value compares, hashes and
+    serialises as the plain registered ID.
+    """
+
+    built: str
+
+    def __new__(cls, registered: str, built: str) -> "_RegisteredId":
+        obj = super().__new__(cls, registered)
+        obj.built = built
+        return obj
+
+
+def _plain_strings(node: Any) -> Any:
+    """Return ``node`` with every :class:`_RegisteredId` turned into a ``str``.
+
+    The cards leave the builder as plain JSON data.
+    """
+    if isinstance(node, _RegisteredId):
+        return str(node)
+    if isinstance(node, dict):
+        return {key: _plain_strings(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_plain_strings(value) for value in node]
+    return node
+
+
+def _built(entity_id: str) -> str:
+    """Return the slug-built ID of a row's entity_id (itself when not resolved)."""
+    return getattr(entity_id, "built", entity_id)
+
+
+class EntityIdMap(dict):
+    """``(domain, original_name) -> entity_id`` table of one bound device.
+
+    ``claimed`` holds every enabled entity_id of the device, including the
+    candidates that lost an ambiguity: an entity_id registered for one name
+    must not be rendered as the fallback of another row.
+    """
+
+    claimed: frozenset[str] = frozenset()
+
+
+def _claimed_ids(entity_id_map: dict[tuple[str, str], str]) -> frozenset[str]:
+    """Return the entity_ids the table gives to some original_name."""
+    claimed = getattr(entity_id_map, "claimed", frozenset())
+    return claimed | frozenset(entity_id_map.values())
+
+
+def _firmware_entity_id(
+    device_name: str,
+    reg_id: str,
+    domain: str,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
+) -> str | None:
+    """Return the HA entity_id of the firmware entity for a registry id.
+
+    [#279] The generator names a firmware entity ``<registry-id>_device``.
+    When ``entity_id_map`` (see :func:`build_entity_id_map`) knows an entity
+    of the bound device under that name, its registered entity_id is used —
+    Home Assistant may have registered it under an ID that does not start
+    with this device's slug. Without a map the ID built from the device name
+    applies, as before.
+
+    With a map but without an entry for the name, the built ID applies —
+    unless the table registers that ID under another name: it belongs to
+    another entity then, and the row does not exist. ``None`` is returned and
+    the caller renders nothing for it.
+    """
+    built = f"{domain}.{device_name}_{reg_id}_device"
+    if not entity_id_map:
+        return built
+    registered = entity_id_map.get((domain, f"{reg_id}_device"))
+    if registered is None:
+        return None if built in _claimed_ids(entity_id_map) else built
+    return built if registered == built else _RegisteredId(registered, built)
+
+
+def _entity_id(
+    device_name: str,
+    entry: dict[str, Any],
+    domain: str,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
+) -> str | None:
+    """Return the HA entity_id for a registry entry (``None``: no such row)."""
+    return _firmware_entity_id(device_name, entry["id"], domain, entity_id_map)
+
+
+def build_entity_id_map(
+    device_name: str, entities: Any
+) -> dict[tuple[str, str], str]:
+    """Map ``(domain, original_name)`` to the registered entity_id.
+
+    [#279] ``entities`` are the entity-registry entries of the bound device
+    (``er.async_entries_for_device``). Matching is by ``original_name`` — the
+    name set in the generated ESPHome YAML — and entries with ``disabled_by``
+    are ignored, as in the adoption's entity-surface check.
+
+    Several entities under one key: the ID built from the device name wins
+    when it is among them, otherwise the alphabetically first.
+    """
+    candidates: dict[tuple[str, str], list[str]] = {}
+    for ent in entities:
+        if getattr(ent, "disabled_by", None) is not None:
+            continue
+        original = getattr(ent, "original_name", None)
+        entity_id = getattr(ent, "entity_id", None)
+        if not isinstance(original, str) or not original:
+            continue
+        if not isinstance(entity_id, str) or "." not in entity_id:
+            continue
+        domain = entity_id.split(".", 1)[0]
+        candidates.setdefault((domain, original), []).append(entity_id)
+
+    resolved = EntityIdMap()
+    for (domain, original), entity_ids in candidates.items():
+        built = f"{domain}.{device_name}_{original}"
+        resolved[(domain, original)] = (
+            built if built in entity_ids else min(entity_ids)
+        )
+    resolved.claimed = frozenset(
+        entity_id for ids in candidates.values() for entity_id in ids
+    )
+    return resolved
 
 
 def _display_label(entry: dict[str, Any]) -> str:
@@ -536,12 +664,22 @@ _MODE_BUTTON_ICONS: dict[str, str] = {
 }
 
 
-def _priority_control_entity_id(device_name: str) -> str:
-    """Return the canonical priority_control HA select entity ID."""
-    return f"select.{device_name}_priority_control_device"
+def _priority_control_entity_id(
+    device_name: str,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
+) -> str | None:
+    """Return the priority_control HA select entity ID (registered, else built).
+
+    ``None`` when the bound device registers the built ID under another name."""
+    return _firmware_entity_id(
+        device_name, "priority_control", "select", entity_id_map
+    )
 
 
-def _export_limit_mode_sensor_entity_id(device_name: str) -> str:
+def _export_limit_mode_sensor_entity_id(
+    device_name: str,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
+) -> str | None:
     """Return the Export Limit mode SENSOR entity ID (HR122 readback source).
 
     [issue #50] HR122 is emitted as a read-only diagnostic sensor (raw value
@@ -550,8 +688,13 @@ def _export_limit_mode_sensor_entity_id(device_name: str) -> str:
     inside the status markdown template
     (:func:`_build_export_limit_status_card`) — never as a Lovelace entity row.
     HR122 mode changes are made at the inverter / Growatt app (product
-    decision 2026-06-12, issues #50/#51)."""
-    return f"sensor.{device_name}_export_limit_enable_device"
+    decision 2026-06-12, issues #50/#51).
+
+    [#279] ``None`` when the bound device registers the built ID under another
+    name; the read-only card is then not rendered."""
+    return _firmware_entity_id(
+        device_name, "export_limit_enable", "sensor", entity_id_map
+    )
 
 
 def _grid_first_schedule_enabled_entity_id(device_name: str) -> str:
@@ -753,6 +896,7 @@ def _make_grid_first_activate_button_row(
     device_name: str,
     *,
     entry_id: str | None = None,
+    priority_control_eid: str | None = None,
 ) -> dict[str, Any]:
     """Activate-button row for Grid First.
 
@@ -760,6 +904,9 @@ def _make_grid_first_activate_button_row(
     publishes the EDATEC virtual draft schedule). Service registration
     is out of scope for this task; the row matches the validated
     EDATEC backup so the existing helper service handles the click.
+
+    [#279] ``priority_control_eid`` is the select the button displays; the
+    caller passes the resolved ID. The service data keeps the device slug.
     """
     action_data = {"device_name": device_name}
     if entry_id:
@@ -769,7 +916,8 @@ def _make_grid_first_activate_button_row(
         "type": "buttons",
         "entities": [
             {
-                "entity": _priority_control_entity_id(device_name),
+                "entity": priority_control_eid
+                or _priority_control_entity_id(device_name),
                 "name": "Activate",
                 "icon": _MODE_BUTTON_ICONS["Grid First"],
                 "show_name": True,
@@ -927,6 +1075,7 @@ def _mic_surface_rows(
     device_name: str,
     registers: dict[str, Any],
     surface: tuple[tuple[str, str], ...],
+    entity_id_map: dict[tuple[str, str], str] | None = None,
 ) -> list[tuple[str, str]]:
     """Resolve an explicit MIC allow-list to ``(entity_id, label)`` rows.
 
@@ -955,9 +1104,9 @@ def _mic_surface_rows(
                 continue
             if entry.get("tier") == "unsafe":
                 break
-            rows.append(
-                (f"{domain}.{device_name}_{reg_id}_device", _display_label(entry))
-            )
+            eid = _firmware_entity_id(device_name, reg_id, domain, entity_id_map)
+            if eid is not None:
+                rows.append((eid, _display_label(entry)))
             break
     return rows
 
@@ -971,6 +1120,7 @@ def build_cards(
     mac_suffix: str | None = None,
     entry_id: str | None = None,
     selected_tier: str | None = None,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build Lovelace cards from a registry.
 
@@ -994,6 +1144,13 @@ def build_cards(
         entry_id: optional PVAutonomy config entry ID. Included in
             Grid First activation service data to avoid multi-entry
             ambiguity.
+        entity_id_map: optional ``(domain, original_name) -> entity_id``
+            table of the bound device (:func:`build_entity_id_map`, #279).
+            Firmware entities are referenced by their registered entity_id;
+            ``None``, an empty table or a missing name keep the ID built
+            from ``device_name``. The tier and live gates test the resolved
+            ID. Grid First helper rows and bridge diagnostics are not
+            resolved through it.
 
     Returns:
         list of Lovelace card dicts ready for a view.
@@ -1015,6 +1172,10 @@ def build_cards(
     has_battery = registry.get("features", {}).get("battery_storage", False)
     groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
     registry_entries: dict[str, dict[str, Any]] = {}
+
+    # [#279] Pinning, ordering and labels read the ID built from the slug
+    # (it carries the `_<registry-id>_device` token); the rows reference the
+    # resolved ID and carry the built one with them (see `_RegisteredId`).
 
     registers = registry.get("registers", {})
     domain_map = {
@@ -1048,14 +1209,15 @@ def build_cards(
             # registry — the refresh reads the entry's tier immediately. Guarded
             # by live state: a device whose entry tier is unset/mis-tagged but
             # actually runs Extended keeps any control that is genuinely live.
+            eid = _entity_id(device_name, entry, domain, entity_id_map)
+            if eid is None:  # [#279] its ID belongs to another entity
+                continue
             if entry.get("tier") == "extended" and selected_tier == "standard":
-                _eid = _entity_id(device_name, entry, domain)
-                if not (live_entity_ids is not None and _eid in live_entity_ids):
+                if not (live_entity_ids is not None and eid in live_entity_ids):
                     continue
             group = _classify_entity(entry, bucket)
             if group is None:
                 continue
-            eid = _entity_id(device_name, entry, domain)
             label = _display_label(entry)
             groups[group].append((eid, label))
             registry_entries[entry["id"]] = entry
@@ -1088,7 +1250,9 @@ def build_cards(
         ):
             target = merged.setdefault(card_title, [])
             present = {eid for eid, _ in target}
-            for eid, label in _mic_surface_rows(device_name, registers, surface):
+            for eid, label in _mic_surface_rows(
+                device_name, registers, surface, entity_id_map
+            ):
                 if eid not in present:
                     target.append((eid, label))
                     present.add(eid)
@@ -1103,7 +1267,7 @@ def build_cards(
         battery_keep: list[tuple[str, str]] = []
         for reg_id in battery_pinned:
             for eid, label in registry_battery_rows:
-                if f"_{reg_id}_device" in eid:
+                if f"_{reg_id}_device" in _built(eid):
                     battery_keep.append((eid, label))
                     break
         merged["Battery"] = battery_keep
@@ -1121,7 +1285,7 @@ def build_cards(
         )
     )
     priority_control_eid = (
-        _priority_control_entity_id(device_name)
+        _priority_control_entity_id(device_name, entity_id_map)
         if has_priority_control
         else None
     )
@@ -1167,7 +1331,7 @@ def build_cards(
     # live-gate, where a missing entity would render an "Entität nicht gefunden"
     # placeholder.)
     export_limit_status_eid = (
-        _export_limit_mode_sensor_entity_id(device_name)
+        _export_limit_mode_sensor_entity_id(device_name, entity_id_map)
         if has_export_limit
         else None
     )
@@ -1200,6 +1364,7 @@ def build_cards(
                 registry_entries=registry_entries,
                 live_entity_ids=live_entity_ids,
                 mac_suffix=mac_suffix,
+                entity_id_map=entity_id_map,
             )
             if status_card:
                 cards.append(status_card)
@@ -1212,7 +1377,9 @@ def build_cards(
             # by the surfaced rows (_MIC_STATUS_SURFACE) so absent entities yield
             # no line. AC Current precision is fixed at the registry/generator
             # metadata layer (accuracy_decimals), not here.
-            status_card = _build_mic_status_card(list(merged.get("Status", [])))
+            status_card = _build_mic_status_card(
+                list(merged.get("Status", []))
+            )
             if status_card:
                 cards.append(status_card)
             # [I1 2026-06-16] Edge bridge diagnostics (Edge WiFi Signal + Edge
@@ -1288,9 +1455,14 @@ def build_cards(
 
         entities = merged[title]
         if title == "PV":
-            entities = sorted(entities, key=_pv_sort_key)
+            entities = sorted(
+                entities, key=lambda row: _pv_sort_key((_built(row[0]), row[1]))
+            )
         elif title in _SECTION_ROW_ORDER:
-            entities = sorted(entities, key=_section_sort_key_factory(title))
+            section_key = _section_sort_key_factory(title)
+            entities = sorted(
+                entities, key=lambda row: section_key((_built(row[0]), row[1]))
+            )
 
         # [fix/sph-dashboard-tier-live-gating] Keep AC Output in both tiers with
         # L1 / total / frequency / output-energy intact, but render the optional
@@ -1300,7 +1472,7 @@ def build_cards(
             entities = [
                 (eid, label)
                 for eid, label in entities
-                if not _is_optional_ac_phase_row(eid)
+                if not _is_optional_ac_phase_row(_built(eid))
                 or _dashboard_entity_available(
                     eid,
                     live_entity_ids=live_entity_ids,
@@ -1328,7 +1500,7 @@ def build_cards(
     if has_battery:
         cards = _order_sph_cards_for_masonry(cards)
 
-    return cards
+    return _plain_strings(cards)
 
 
 _SPH_MOBILE_CARD_ORDER: tuple[str, ...] = (
@@ -1486,6 +1658,7 @@ def _build_sph_status_card(
     registry_entries: dict[str, dict[str, Any]],
     live_entity_ids: set[str] | None,
     mac_suffix: str | None,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, Any] | None:
     """Build the SPH Status card with synthetic + registry-derived rows.
 
@@ -1522,7 +1695,13 @@ def _build_sph_status_card(
             if eid is None:
                 continue
         else:
-            eid = f"{domain}.{device_name}_{reg_id}_device"
+            # [#279] Firmware sensor: registered ID of the bound device when
+            # known. The bridge diagnostics above keep their own resolver.
+            eid = _firmware_entity_id(
+                device_name, reg_id, domain, entity_id_map
+            )
+            if eid is None:  # its ID belongs to another entity
+                continue
         label = _COMPACT_LABELS.get(reg_id) or _display_label(
             registry_entries.get(reg_id, {"id": reg_id})
         )
@@ -1577,12 +1756,16 @@ def _build_mic_status_card(
     Markdown never produces a broken "Entität nicht gefunden" row, and only the
     surfaced entities are referenced (absent ids produce no line). Returns
     ``None`` when there are no rows.
+
+    [#279] The row kind is read off the ID built from the slug that the row's
+    entity_id carries (:func:`_built`); the template reads the resolved one.
     """
     if not rows:
         return None
     lines: list[str] = []
     for eid, label in rows:
-        if eid.endswith("_inverter_status_device"):
+        kind = _built(eid)
+        if kind.endswith("_inverter_status_device"):
             lines.append(
                 f"**{label}:** "
                 f"{{% set raw = states('{eid}') %}}"
@@ -1593,7 +1776,7 @@ def _build_mic_status_card(
                 f"{{% elif raw in ['unknown', 'unavailable', '', none] %}}Unknown"
                 f"{{% else %}}Unknown ({{{{ raw }}}}){{% endif %}}"
             )
-        elif eid.endswith("_inverter_temperature_device"):
+        elif kind.endswith("_inverter_temperature_device"):
             # [P1h] Format to one decimal so the raw float32 register value
             # (e.g. 33.4000015258789) renders as a clean "33.4 °C" — never a
             # long float. `float(none)` collapses unknown/unavailable/missing
@@ -1751,18 +1934,23 @@ def _build_sph_control_card(
     [TASK-014Y 2026-05-11] Live state is preferred, but active registry
     presence is accepted to survive startup refresh races. Disabled or hidden
     entries are filtered out before ``existing_entity_ids`` is supplied.
+
+    [#279] Which row an entity is, and the order of the remaining rows, are
+    read off the ID built from the slug that the row's entity_id carries
+    (:func:`_built`); availability is tested on the resolved one.
     """
     active_pr: tuple[str, str] | None = None
     export_pr: tuple[str, str] | None = None
     rest: list[tuple[str, str]] = []
     for eid, label in rows:
+        kind = _built(eid)
         # [P1b] The Export Limit Power (W) live readback
         # (`*_export_limit_power_w_device`) is intentionally kept OUT of the
         # customer dashboard for now. It is grouped to "control" via the
         # `export_limit` id-prefix fallback and would otherwise render once it
         # goes live — but it is distinct from the Export Limit Power *Rate*
         # number, which IS shown. Drop only the power-W sensor row.
-        if "_export_limit_power_w_device" in eid:
+        if "_export_limit_power_w_device" in kind:
             continue
         # [fix/sph-dashboard-tier-live-gating] Skip registry control rows whose
         # entity is not live/registered. On a Standard-tier flash the Extended
@@ -1776,9 +1964,9 @@ def _build_sph_control_card(
             existing_entity_ids=existing_entity_ids,
         ):
             continue
-        if "_active_power_rate_device" in eid:
+        if "_active_power_rate_device" in kind:
             active_pr = (eid, label)
-        elif "_export_limit_power_rate_device" in eid:
+        elif "_export_limit_power_rate_device" in kind:
             export_pr = (eid, label)
         else:
             rest.append((eid, label))
@@ -1792,7 +1980,9 @@ def _build_sph_control_card(
     # (_build_export_limit_status_card); the switch is deliberately NOT added as
     # an entity/attribute row here, so the customer cannot open its More-Info /
     # toggle dialog from the Control card.
-    for eid, label in sorted(rest):
+    for eid, label in sorted(
+        rest, key=lambda row: (_built(row[0]), row[1])
+    ):
         entities.append({"entity": eid, "name": label})
 
     return {
@@ -1858,6 +2048,10 @@ def _build_sph_mode_settings_card(
     Live state is preferred; active registry presence is accepted for
     startup refresh races. Raw unsafe timeslot ENABLE switches stay
     hidden.
+
+    [#279] Row order and compact labels are read off the ID built from the
+    slug that the row's entity_id carries (:func:`_built`); availability is
+    tested on the resolved one, which the row references.
     """
     mode_label_by_title = {
         "Load First Settings": "Load First",
@@ -1871,7 +2065,7 @@ def _build_sph_mode_settings_card(
     rank = {name: idx for idx, name in enumerate(pinned)}
 
     def _row_sort_key(item: tuple[str, str]) -> tuple[int, int, str]:
-        eid, _ = item
+        eid = _built(item[0])
         for name, idx in rank.items():
             if f"_{name}_device" in eid:
                 return (0, idx, eid)
@@ -1899,14 +2093,17 @@ def _build_sph_mode_settings_card(
         return None
     for eid, _ in available_rows:
         # Compact label by register ID; fall back to existing label.
+        built_eid = _built(eid)
         reg_id = ""
         m = re.match(
-            rf"^[^.]+\.{re.escape(device_name)}_(.+)_device$", eid
+            rf"^[^.]+\.{re.escape(device_name)}_(.+)_device$", built_eid
         )
         if m:
             reg_id = m.group(1)
         compact = _COMPACT_LABELS.get(reg_id)
-        body_rows.append({"entity": eid, "name": compact or _label_from_eid(eid)})
+        body_rows.append(
+            {"entity": eid, "name": compact or _label_from_eid(built_eid)}
+        )
 
     if title == "Grid First Settings":
         # [EPIC-012 / TASK-014Q] Insert Schedule Enabled, Slot 1 Start,
@@ -1949,6 +2146,7 @@ def _build_sph_mode_settings_card(
             activate_row = _make_grid_first_activate_button_row(
                 device_name,
                 entry_id=entry_id,
+                priority_control_eid=priority_control_eid,
             )
         else:
             activate_row = _make_mode_activate_button_row(
@@ -3615,6 +3813,7 @@ def build_dashboard_config(
     mac_suffix: str | None = None,
     entry_id: str | None = None,
     selected_tier: str | None = None,
+    entity_id_map: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
     """Build the full Lovelace storage config payload.
 
@@ -3624,6 +3823,9 @@ def build_dashboard_config(
     at generation time and is used to gate helper rows (Edge WiFi
     Signal, Export Limit Mode/toggle) whose registry entries can become
     orphans across deployments.
+
+    [#279] ``entity_id_map`` is handed to :func:`build_cards`, which
+    references firmware entities by their registered entity_id.
     """
     cards = build_cards(
         device_name,
@@ -3633,6 +3835,7 @@ def build_dashboard_config(
         mac_suffix=mac_suffix,
         entry_id=entry_id,
         selected_tier=selected_tier,
+        entity_id_map=entity_id_map,
     )
     has_battery = registry.get("features", {}).get("battery_storage", False)
     view_cards = (
@@ -3673,6 +3876,7 @@ async def async_create_dashboard(
     model_slug: str | None = None,
     selected_tier: str | None = None,
     entry_id: str | None = None,
+    ha_device_id: str | None = None,
 ) -> bool:
     """Create or refresh a customer dashboard for a PVAutonomy device.
 
@@ -3690,6 +3894,13 @@ async def async_create_dashboard(
     builder drops extended-only controls and suppresses the Export-Limit card
     (issues #67/#68); Extended tier is unchanged (#55 preserved).
 
+    [#279] ``ha_device_id`` is the Home Assistant device the dashboard is
+    bound to. Firmware entities are referenced by the entity_id registered
+    for that device. Without it, the ID is read from the config entry
+    ``entry_id`` (``options["ha_device_id"]``, else ``data["ha_device_id"]``).
+    With no bound device, or when the entity registry cannot be read, the
+    entity IDs are built from ``device_name`` as before.
+
     Returns True if dashboard was created or refreshed, False if failed.
     """
     try:
@@ -3701,6 +3912,7 @@ async def async_create_dashboard(
                 registry_file,
                 entry_id=entry_id,
                 selected_tier=selected_tier,
+                ha_device_id=ha_device_id,
             )
     except Exception:
         _LOGGER.warning(
@@ -3711,6 +3923,57 @@ async def async_create_dashboard(
         return False
 
 
+def _bound_ha_device_id(hass: HomeAssistant, entry_id: str) -> str | None:
+    """Read the bound HA device ID from a config entry (options, then data)."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    for source in (
+        getattr(entry, "options", None),
+        getattr(entry, "data", None),
+    ):
+        if source is None:
+            continue
+        value = source.get("ha_device_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _load_entity_id_map(
+    hass: HomeAssistant,
+    device_name: str,
+    *,
+    ha_device_id: str | None = None,
+    entry_id: str | None = None,
+) -> dict[tuple[str, str], str] | None:
+    """Build the entity-ID table of the bound device, or ``None``.
+
+    [#279] ``None`` — no bound device, or the registry could not be read —
+    leaves the dashboard on the entity IDs built from ``device_name``.
+    Best-effort: never raises, and logs the exception type only.
+    """
+    try:
+        if not (isinstance(ha_device_id, str) and ha_device_id):
+            ha_device_id = (
+                _bound_ha_device_id(hass, entry_id) if entry_id else None
+            )
+        if not ha_device_id:
+            return None
+
+        from homeassistant.helpers import entity_registry as er
+
+        ent_reg = er.async_get(hass)
+        return build_entity_id_map(
+            device_name, er.async_entries_for_device(ent_reg, ha_device_id)
+        )
+    except Exception as err:  # noqa: BLE001 — the lookup is best-effort
+        _LOGGER.warning(
+            "Dashboard entity lookup failed (%s); using entity IDs built "
+            "from the device name",
+            type(err).__name__,
+        )
+        return None
+
+
 async def _create_dashboard_impl(
     hass: HomeAssistant,
     device_name: str,
@@ -3719,6 +3982,7 @@ async def _create_dashboard_impl(
     *,
     entry_id: str | None = None,
     selected_tier: str | None = None,
+    ha_device_id: str | None = None,
 ) -> bool:
     """Internal: create or refresh dashboard.
 
@@ -3812,6 +4076,12 @@ async def _create_dashboard_impl(
     except Exception:  # noqa: BLE001 — metadata is best-effort here
         mac_suffix = None
 
+    # [#279] Entity IDs as registered for the bound device. ``None`` keeps
+    # the IDs built from the device name.
+    entity_id_map = _load_entity_id_map(
+        hass, device_name, ha_device_id=ha_device_id, entry_id=entry_id
+    )
+
     config = build_dashboard_config(
         device_name,
         display_title,
@@ -3821,6 +4091,7 @@ async def _create_dashboard_impl(
         mac_suffix=mac_suffix,
         entry_id=entry_id,
         selected_tier=selected_tier,
+        entity_id_map=entity_id_map,
     )
 
     # --- Step 1: Add registry entry only if not yet present ---

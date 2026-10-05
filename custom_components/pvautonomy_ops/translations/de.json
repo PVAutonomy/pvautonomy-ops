@@ -132,6 +132,14 @@
         "title": "Laufendes Gerät übernehmen",
         "description": "**{device_name}**\n\nGeräte-ID: `{device_id}`\nHersteller: {manufacturer}\nModell: {model}\nMAC-Suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nHiermit wird das bereits laufende Gerät in PVAutonomy registriert. **Es wird keine Firmware erstellt, installiert oder neu geflasht.** Klicken Sie auf **Senden**, um zu übernehmen.{missing_entities}"
       },
+      "adopt_name_mismatch": {
+        "title": "Controller-Name weicht ab",
+        "description": "Der gewählte Controller nennt sich **{node_name}** (MAC-Suffix `{mac_suffix}`).\n\nAus Modell, Standort und Nummer würde PVAutonomy ihn als **{device_slug}** registrieren.\n\nHaben Sie den falschen Controller gewählt, brechen Sie ab und starten Sie erneut. Wenn Sie diesem Controller bewusst einen neuen Standort oder eine neue Nummer geben, fahren Sie fort.",
+        "menu_options": {
+          "adopt_name_mismatch_cancel": "Abbrechen",
+          "adopt_name_mismatch_continue": "Trotzdem übernehmen"
+        }
+      },
       "progress_build": {
         "title": "Firmware wird erstellt",
         "description": "Firmware für **{device_name}** wird erstellt...\n\nDies dauert in der Regel 5–15 Minuten. In Einzelfällen kann es länger dauern. Bitte lassen Sie dieses Fenster geöffnet und brechen Sie den Vorgang nicht ab.\n\nBei einer kurzzeitigen Verbindungsunterbrechung läuft die Erstellung im Hintergrund weiter."
@@ -212,7 +220,8 @@
       "local_yaml_generation_failed": "Die Geräte-YAML für `{node_name}` konnte nicht erzeugt werden. Es wurde nichts geschrieben, und es gibt keine Datei zum Bauen. Die Einrichtung wurde hier beendet, statt Erfolg zu melden.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie im Home-Assistant-Log die Einträge zu `pvautonomy_ops` auf den vollständigen Traceback, kontrollieren Sie, ob Hersteller und Wechselrichter-Modell richtig gewählt sind, und starten Sie die Einrichtung erneut. Wenn es bei einem unterstützten Modell weiter fehlschlägt, melden Sie es bitte mit diesem Log-Auszug — ohne Ihre `secrets.yaml`.",
       "local_yaml_write_failed": "Die Geräte-YAML für `{node_name}` wurde erzeugt, konnte aber nicht unter `/config/esphome/` gespeichert werden. Es gibt daher keine Datei zum Bauen. Die Einrichtung wurde hier beendet, statt Erfolg zu melden.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie, ob das Verzeichnis `/config` beschreibbar ist und freien Speicher hat, und starten Sie die Einrichtung erneut. Mit dem File-Editor-Add-on, Samba oder Terminal/SSH können Sie den Ordner `esphome` selbst kontrollieren.",
       "local_secrets_write_failed": "Ihre ESPHome-`secrets.yaml` konnte nicht vorbereitet werden. Die Einträge, die der Build braucht, fehlen daher, und eine Geräte-YAML zu erzeugen wäre sinnlos. Die Einrichtung wurde hier beendet, statt Erfolg zu melden. An der Datei wurde nichts geändert.\n\nFehler: {error}\n\nWas Sie tun können: Prüfen Sie, ob `/config/esphome/` beschreibbar ist und freien Speicher hat und ob die dortige `secrets.yaml` gültiges YAML ist — ein `name: wert` pro Zeile. Mit dem File-Editor-Add-on, Samba oder Terminal/SSH können Sie sie selbst öffnen. Starten Sie die Einrichtung danach erneut.",
-      "managed_paths_not_available": "Dieser Einrichtungsweg gehört nicht zur PVAutonomy Community Alpha. Wählen Sie „Neuen Controller einrichten“ oder „Laufenden Controller übernehmen“."
+      "managed_paths_not_available": "Dieser Einrichtungsweg gehört nicht zur PVAutonomy Community Alpha. Wählen Sie „Neuen Controller einrichten“ oder „Laufenden Controller übernehmen“.",
+      "adopt_name_mismatch_cancelled": "Es wurde nichts registriert. Starten Sie die Einrichtung erneut und wählen Sie den Controller, der zu Standort und Nummer passt, oder geben Sie Standort und Nummer des Controllers ein, den Sie übernehmen möchten."
     }
   },
   "entity": {
