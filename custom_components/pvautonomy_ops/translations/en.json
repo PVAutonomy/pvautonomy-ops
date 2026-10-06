@@ -132,6 +132,14 @@
         "title": "Adopt Running Device",
         "description": "**{device_name}**\n\nDevice ID: `{device_id}`\nManufacturer: {manufacturer}\nModel: {model}\nMAC suffix: `{mac_suffix}`\nRegistry: `{registry_file}`\n\nThis registers the already-running device in PVAutonomy. **No firmware is built, installed, or reflashed.** Click **Submit** to adopt.{missing_entities}"
       },
+      "adopt_name_mismatch": {
+        "title": "Controller Name Differs",
+        "description": "The controller you selected calls itself **{node_name}** (MAC suffix `{mac_suffix}`).\n\nFrom the model, location and number you entered, PVAutonomy would register it as **{device_slug}**.\n\nIf you selected the wrong controller, cancel and start again. If you are deliberately giving this controller a new location or number, continue.",
+        "menu_options": {
+          "adopt_name_mismatch_cancel": "Cancel",
+          "adopt_name_mismatch_continue": "Adopt anyway"
+        }
+      },
       "progress_build": {
         "title": "Building Firmware",
         "description": "Building firmware for **{device_name}**...\n\nThis usually takes 5–15 minutes. In some cases it may take longer. Please keep this window open and do not cancel the process.\n\nIf the connection is interrupted briefly, the build continues in the background."
@@ -212,7 +220,8 @@
       "local_yaml_generation_failed": "The device YAML for `{node_name}` could not be generated, so nothing was written and there is no file to build. Setup stopped here rather than report success.\n\nError: {error}\n\nWhat you can do: check the Home Assistant log for `pvautonomy_ops` for the full traceback, confirm you picked the right manufacturer and inverter model, and start the setup again. If it keeps failing for a supported model, please report it with that log excerpt — do not include your `secrets.yaml`.",
       "local_yaml_write_failed": "The device YAML for `{node_name}` was generated but could not be saved to `/config/esphome/`, so there is no file to build. Setup stopped here rather than report success.\n\nError: {error}\n\nWhat you can do: check that the `/config` directory is writable and has free space, then start the setup again. With the File Editor add-on, Samba, or Terminal/SSH you can verify the `esphome` folder yourself.",
       "local_secrets_write_failed": "Your ESPHome `secrets.yaml` could not be prepared, so the entries the build needs are not in place and there is no point generating a device YAML. Setup stopped here rather than report success. Nothing in that file was changed.\n\nError: {error}\n\nWhat you can do: check that `/config/esphome/` is writable and has free space, and that `secrets.yaml` there is valid YAML — one `name: value` per line. With the File Editor add-on, Samba, or Terminal/SSH you can open it yourself. Then start the setup again.",
-      "managed_paths_not_available": "This setup path is not part of the PVAutonomy Community Alpha. Use \"Set up a new controller\" or \"Adopt a running controller\"."
+      "managed_paths_not_available": "This setup path is not part of the PVAutonomy Community Alpha. Use \"Set up a new controller\" or \"Adopt a running controller\".",
+      "adopt_name_mismatch_cancelled": "Nothing was registered. Start the setup again and select the controller that matches the location and number you enter, or enter the location and number of the controller you want to adopt."
     }
   },
   "entity": {

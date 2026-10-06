@@ -85,6 +85,12 @@ them as they are.
 
 ## Part 2 — Adopt a running controller
 
+**Before you start:** the controller must be running and **added** in the
+ESPHome integration (**Settings → Devices & Services → ESPHome**). A
+controller that is only listed as discovered there is not offered by this
+wizard. To add it, see step 11 of
+[LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md).
+
 Start the wizard again and choose **Adopt a running controller**.
 
 1. **Select Model** and **Device Location** — the same values as in part 1.
@@ -98,11 +104,23 @@ Start the wizard again and choose **Adopt a running controller**.
    shows *"Device slug is fixed after first install. …"*. A controller known
    only from an earlier setup is adopted as usual; with different values,
    *Device Already Known* asks first.
-3. **Device Already Known** — appears only if no PVAutonomy entry is bound to
+
+   Each entry shows the controller's name and the last six characters of
+   its MAC address. Choose the controller you set up in part 1; the list
+   may hold other controllers. If yours is missing, cancel, add it in the
+   ESPHome integration as described above, and start again.
+3. **Controller Name Differs** — appears only if the controller you
+   selected calls itself differently from the name that your model,
+   location and number give, for example `sph10k-home-02` instead of
+   `sph10k-bench-05`. **Cancel** stops the setup without registering
+   anything: start again and select the right controller, or enter its
+   location and number. **Adopt anyway** continues: use it only when you
+   deliberately give this controller a new location or number.
+4. **Device Already Known** — appears only if no PVAutonomy entry is bound to
    this controller, but PVAutonomy still knows it from an earlier setup under
    a different model, location or number. **Relocate** moves it to the new
    values; **Cancel** stops the setup.
-4. **Adopt Running Device** — shows what will be registered. Submit it.
+5. **Adopt Running Device** — shows what will be registered. Submit it.
    Before it registers the controller, the wizard checks that the device
    offers the entities the generated firmware provides, and derives the
    feature level from them. No firmware is built, installed, or reflashed.
