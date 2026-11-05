@@ -78,7 +78,7 @@ Installing without HACS, and the steps after that: see the
 - **Issues and bug reports:** [GitHub Issues](https://github.com/PVAutonomy/pvautonomy-ops/issues)
 - **Community:** [Home Assistant Forum](https://community.home-assistant.io/)
 
-## Project status
+## Status
 
 PVAutonomy is an early release. It comes without warranty and without a
 support commitment, and no security assurance is given. What it was tested
