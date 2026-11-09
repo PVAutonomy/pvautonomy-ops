@@ -76,10 +76,10 @@ network, or a password the screen does not accept, write `wifi_ssid` and
 `wifi_password` into `/config/esphome/secrets.yaml` yourself and run the
 wizard again — it uses existing entries as they are and does not ask.
 
-### "This setup path is not part of the PVAutonomy Community Alpha"
+### "This setup path is not available"
 
-> This setup path is not part of the PVAutonomy Community Alpha. Use "Set up
-> a new controller" or "Adopt a running controller".
+> This setup path is not available. Use "Set up a new controller" or "Adopt a
+> running controller".
 
 You should not see this message on the normal path. It means a setup step
 for a firmware service that this release does not offer was reached. Start

@@ -3,12 +3,14 @@
 A Home Assistant integration for a DFRobot Edge101 controller (DFR0886) that
 reads and controls a Growatt inverter (SPH10K or MIC600) over RS485/Modbus.
 
-This release is a **Community Alpha**: experimental, for technically capable
-Home Assistant users, without warranty or support commitment. It does not
-build or install firmware for you: the setup generates the ESPHome device
-configuration, you build and flash it with ESPHome, and the setup then adopts
-the running controller. What the project does and does not claim, and how to
-report a security issue, is stated in the
+The setup generates the ESPHome device configuration for your controller and
+creates its API key and OTA password on your own Home Assistant. You build and
+flash the firmware yourself with ESPHome, and the setup then adopts the
+running controller.
+
+PVAutonomy is an early release. What is checked on hardware, and what does
+not work yet, is in [Known limitations](docs/KNOWN-LIMITATIONS.md). The
+project status, the license and how to report a security issue are in the
 [README](https://github.com/PVAutonomy/pvautonomy-ops) and the
 [security policy](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md)
 of the distribution repository.
@@ -52,6 +54,7 @@ of the distribution repository.
 - [Setup wizard](docs/SETUP-WIZARD.md) — the setup, screen by screen
 - [Local ESPHome self-build](docs/LOCAL-ESPHOME-SELF-BUILD.md) — building and flashing the firmware
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — messages you may see, and what to do
+- [Known limitations](docs/KNOWN-LIMITATIONS.md) — what is checked on hardware, and what does not work yet
 - [FAQ](docs/FAQ.md)
 
 ## Entity naming
