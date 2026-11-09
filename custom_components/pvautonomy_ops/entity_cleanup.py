@@ -293,12 +293,27 @@ def _iter_entity_registry_entries(entity_reg) -> list[object]:
     return []
 
 
+def _owned_by_another_entry(entry: object, config_entry_id: str | None) -> bool:
+    """Return True when *config_entry_id* is given and *entry* belongs to another one.
+
+    A registry row without an owner (``config_entry_id`` is ``None``) is not
+    owned by another entry (#364).
+    """
+    if config_entry_id is None:
+        return False
+    owner = getattr(entry, "config_entry_id", None)
+    return owner is not None and owner != config_entry_id
+
+
 def find_stale_grid_first_time_entities(
     hass: HomeAssistant,
     device_name: str,
     config_entry_id: str,
 ) -> list[str]:
-    """Find stale draft time entities left by earlier Grid First experiments."""
+    """Find stale draft time entities left by earlier Grid First experiments.
+
+    Rows of another config entry are never returned (#364).
+    """
     entity_reg = er.async_get(hass)
     stale_ids: list[str] = []
     canonical_ids = {
@@ -315,6 +330,8 @@ def find_stale_grid_first_time_entities(
         if not entity_id.startswith("time."):
             continue
         if getattr(entry, "platform", "") != "pvautonomy_ops":
+            continue
+        if _owned_by_another_entry(entry, config_entry_id):
             continue
         if entity_id in canonical_ids:
             continue
@@ -355,7 +372,8 @@ def find_unsupported_wrapper_entities(
 
     Only entities with ``platform == 'pvautonomy_ops'`` are considered;
     entities from other integrations with coincidentally matching IDs are left
-    untouched.
+    untouched. When *config_entry_id* is given, rows of another config entry
+    are left untouched too (#364).
 
     Idempotent and safe to call even when no stale entities are present.
     """
@@ -374,6 +392,8 @@ def find_unsupported_wrapper_entities(
         if entry is None:
             continue
         if entry.platform != "pvautonomy_ops":
+            continue
+        if _owned_by_another_entry(entry, config_entry_id):
             continue
         found.append(entity_id)
     return found
@@ -404,6 +424,70 @@ def cleanup_unsupported_wrapper_entities(
         device_name,
     )
     return result
+
+
+# ── Helpers left under a previous prefix (#364) ──────────────────
+
+# The own helper entities of switch.py and time.py: (domain, object-id suffix).
+_OWN_HELPER_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("switch", "load_first_activate_device"),
+    ("switch", "battery_first_activate_device"),
+    ("switch", "grid_first_schedule_enabled_draft"),
+    ("time", "grid_first_timeslot_1_start_time"),
+    ("time", "grid_first_timeslot_1_stop_time"),
+)
+
+
+def find_previous_helper_entities(
+    hass: HomeAssistant,
+    previous_name: str,
+    config_entry_id: str,
+    *,
+    domain: str,
+) -> list[str]:
+    """Find this entry's own helpers of *domain* registered under *previous_name*.
+
+    Up to 0.5.1 the helpers took their prefix from ``selected_device``; they
+    now take the device slug the dashboard uses (``helper_names.py``). Only
+    the five helper IDs are candidates, and only registry entries with
+    ``platform == 'pvautonomy_ops'`` that belong to *config_entry_id*.
+    Firmware entities, other platforms and other config entries are never
+    returned.
+    """
+    entity_reg = er.async_get(hass)
+    found: list[str] = []
+    for helper_domain, suffix in _OWN_HELPER_SUFFIXES:
+        if helper_domain != domain:
+            continue
+        entity_id = f"{helper_domain}.{previous_name}_{suffix}"
+        entry = entity_reg.async_get(entity_id)
+        if entry is None:
+            continue
+        if entry.platform != "pvautonomy_ops":
+            continue
+        if entry.config_entry_id != config_entry_id:
+            continue
+        found.append(entity_id)
+    return found
+
+
+def cleanup_previous_helper_entities(
+    hass: HomeAssistant,
+    previous_name: str,
+    config_entry_id: str,
+    *,
+    domain: str,
+) -> CleanupResult:
+    """Delete this entry's own helpers of *domain* left under *previous_name*.
+
+    Idempotent: once they are gone, a later call finds nothing.
+    """
+    stale_ids = find_previous_helper_entities(
+        hass, previous_name, config_entry_id, domain=domain
+    )
+    if not stale_ids:
+        return CleanupResult()
+    return delete_entities(hass, stale_ids)
 
 
 # ── Report (R4) ──────────────────────────────────────────────────

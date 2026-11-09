@@ -31,9 +31,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
-from .const import CONF_SELECTED_DEVICE, DOMAIN
+from .const import DOMAIN
 from .dashboard_builder import load_registry
-from .entity_cleanup import cleanup_unsupported_wrapper_entities
+from .entity_cleanup import (
+    cleanup_previous_helper_entities,
+    cleanup_unsupported_wrapper_entities,
+)
+from .helper_names import async_resolve_helper_device_names
 from .time import (
     _encode_time_to_register,
     get_grid_first_time_entity,
@@ -71,13 +75,22 @@ async def async_setup_entry(
         )
         return
 
-    device_name = await _resolve_selected_device_name(hass, entry)
+    names = await async_resolve_helper_device_names(hass, entry)
+    device_name = names.name
     if not device_name:
         _LOGGER.warning(
             "Skipping switch entity setup for entry %s: selected device unavailable",
             entry.entry_id[:8],
         )
         return
+
+    if names.previous:
+        try:
+            cleanup_previous_helper_entities(
+                hass, names.previous, entry.entry_id, domain="switch"
+            )
+        except Exception:  # noqa: BLE001 — defensive: cleanup is best-effort
+            pass
 
     features = await _load_device_features(hass, entry)
     has_battery = features.get("battery_storage", True)
@@ -122,52 +135,6 @@ async def async_setup_entry(
 def _is_legacy_yaml_import_entry(entry: ConfigEntry) -> bool:
     """Return True for the legacy YAML import entry."""
     return (entry.unique_id or "") == f"{DOMAIN}_yaml_import"
-
-
-def _normalize_device_name(device_name: str | None) -> str | None:
-    """Normalize a selected device name to entity-id slug form."""
-    if not device_name:
-        return None
-    normalized = device_name.strip().lower().replace("-", "_").replace(" ", "_")
-    return normalized or None
-
-
-async def _resolve_selected_device_name(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-) -> str | None:
-    """Resolve the selected device slug for entity-id construction."""
-    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-
-    selected = _normalize_device_name(entry_data.get("selected_device"))
-    if selected:
-        return selected
-
-    input_reader = entry_data.get("input_reader")
-    if input_reader is not None:
-        try:
-            stored = await input_reader.get_selected_device_from_storage(entry.entry_id)
-        except Exception:  # noqa: BLE001 — defensive: storage read is best-effort
-            stored = None
-        selected = _normalize_device_name(stored)
-        if selected:
-            return selected
-
-    selected = _normalize_device_name(entry.options.get(CONF_SELECTED_DEVICE))
-    if selected:
-        return selected
-
-    metadata_store = entry_data.get("metadata_store")
-    ha_device_id = entry.options.get("ha_device_id") or entry.data.get("ha_device_id")
-    if metadata_store is not None and ha_device_id:
-        try:
-            for metadata in await metadata_store.get_all():
-                if metadata.ha_device_id == ha_device_id:
-                    return _normalize_device_name(metadata.ensure_slug())
-        except Exception:  # noqa: BLE001 — defensive: store read is best-effort
-            return None
-
-    return None
 
 
 async def _load_device_features(
@@ -469,6 +436,18 @@ def get_grid_first_schedule_enabled_draft(
     return _GRID_FIRST_SCHEDULE_DRAFT_INSTANCES.get(entity_id)
 
 
+def _require_write_target(hass: HomeAssistant, entity_id: str) -> None:
+    """Raise unless a Grid First write target has a usable state.
+
+    Same rule as ``_read_required_number_state``: no state, ``unknown`` or
+    ``unavailable`` counts as missing. The message names the entity, so the
+    user sees which control Home Assistant does not have (#364).
+    """
+    state = hass.states.get(entity_id)
+    if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+        raise HomeAssistantError(f"Grid First write target unavailable: {entity_id}")
+
+
 def _read_required_number_state(
     hass: HomeAssistant,
     entity_id: str,
@@ -531,8 +510,9 @@ async def async_commit_grid_first_draft(
 
     Manual dashboard editing is draft-only. This helper writes the full bundle
     in Growatt-like order so the inverter sees a coherent Grid First setup.
-    Fail-closed: missing/invalid required inputs raise HomeAssistantError
-    BEFORE any service call is issued.
+    Fail-closed: a missing write target or a missing/invalid required input
+    raises HomeAssistantError BEFORE any service call is issued, so no part
+    of the bundle is written.
     """
     priority_entity_id = f"select.{device_name}_priority_control_device"
     discharge_rate_entity_id = f"number.{device_name}_grid_first_discharge_power_rate_device"
@@ -544,7 +524,18 @@ async def async_commit_grid_first_draft(
     draft_stop_entity_id = f"time.{device_name}_grid_first_timeslot_1_stop_time"
     draft_enabled_entity_id = f"switch.{device_name}_grid_first_schedule_enabled_draft"
 
-    # Validate ALL inputs before any write.
+    # Validate ALL inputs before any write. Every write target first (#364):
+    # one that is missing stops the bundle before any part of it is written.
+    for target_entity_id in (
+        discharge_rate_entity_id,
+        stop_soc_entity_id,
+        start_number_entity_id,
+        stop_number_entity_id,
+        enable_switch_entity_id,
+        priority_entity_id,
+    ):
+        _require_write_target(hass, target_entity_id)
+
     discharge_rate = _read_required_number_state(
         hass,
         discharge_rate_entity_id,

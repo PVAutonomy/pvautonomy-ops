@@ -1,8 +1,7 @@
 # Local ESPHome self-build
 
-This guide is the setup path of the PVAutonomy **Community Alpha**, for
-technically capable Home Assistant users who build and flash the Edge101
-firmware themselves with ESPHome.
+This guide takes you through building and flashing the Edge101 firmware
+yourself with ESPHome.
 
 The PVAutonomy setup generates the ESPHome device configuration and the
 credentials it needs; you compile and flash it yourself; then the setup

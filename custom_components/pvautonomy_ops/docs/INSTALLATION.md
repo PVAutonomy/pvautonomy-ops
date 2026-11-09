@@ -1,16 +1,15 @@
 # Installation
 
 PVAutonomy is a Home Assistant integration for a DFRobot Edge101 controller
-(DFR0886) that connects to a Growatt inverter over RS485/Modbus. This release
-is a **Community Alpha**: experimental, for technically capable Home
-Assistant users, without any warranty or support commitment.
+(DFR0886) that connects to a Growatt inverter over RS485/Modbus.
 
-This release does not build or install firmware for you. You build and flash
-the controller's firmware yourself with ESPHome, and the integration helps you
-prepare it and then adopts the running controller.
+You build and flash the controller's firmware yourself with ESPHome. The
+integration prepares the device configuration for it and then adopts the
+running controller.
 
-What this release does not claim, and how to report a security issue, is
-stated in the project README and security policy:
+PVAutonomy is an early release. What is checked on hardware, and what does
+not work yet, is in [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md). Project
+status, license and security policy:
 [README](https://github.com/PVAutonomy/pvautonomy-ops) ·
 [SECURITY.md](https://github.com/PVAutonomy/pvautonomy-ops/blob/main/SECURITY.md).
 
@@ -31,10 +30,11 @@ stated in the project README and security policy:
 
 **Inverter status in this release:**
 
-- **Growatt SPH10K** — generated firmware has run on an Edge101 connected to
-  an SPH10K in a bench setup.
+- **Growatt SPH10K** — tested in our test setup with an Edge101 connected to
+  a real SPH10K inverter. What is checked there is listed in
+  [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md).
 - **Growatt MIC600** — supported by the configuration generator; not yet
-  validated on hardware with this release.
+  tested on hardware.
 
 No PVAutonomy account, key or online service is needed for anything in this
 documentation.
@@ -90,11 +90,14 @@ middle, in [LOCAL-ESPHOME-SELF-BUILD.md](LOCAL-ESPHOME-SELF-BUILD.md).
 
 ## Update
 
-Update through HACS, or replace the folder by hand as above, then restart
-Home Assistant. Read the release notes on
-[the releases page](https://github.com/PVAutonomy/pvautonomy-ops/releases)
-before you update: they list what changed, including anything that was
-removed.
+1. Read the release notes on
+   [the releases page](https://github.com/PVAutonomy/pvautonomy-ops/releases):
+   they say what changed and what to do after the update.
+2. Install the update. With HACS, it appears under **Settings → Updates** as
+   **PVAutonomy Ops**. Without HACS, replace the folder by hand as above.
+3. Restart Home Assistant.
+4. Reload the browser tab. If the setup still shows texts of the old version,
+   do a hard reload (Ctrl+Shift+R, on macOS Cmd+Shift+R).
 
 An update of the integration does not change the firmware on your controller.
 If a release needs new firmware, its release notes say so, and you rebuild
@@ -136,4 +139,6 @@ you no longer need them.
   flashing the firmware
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — messages you may see, and what
   to do
+- [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md) — what is checked on hardware,
+  and what does not work yet
 - [FAQ.md](FAQ.md)

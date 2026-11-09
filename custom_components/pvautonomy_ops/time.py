@@ -22,9 +22,14 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CONF_SELECTED_DEVICE, DOMAIN
+from .const import DOMAIN
 from .dashboard_builder import load_registry
-from .entity_cleanup import cleanup_unsupported_wrapper_entities, heal_grid_first_time_entities
+from .entity_cleanup import (
+    cleanup_previous_helper_entities,
+    cleanup_unsupported_wrapper_entities,
+    heal_grid_first_time_entities,
+)
+from .helper_names import async_resolve_helper_device_names
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,13 +72,22 @@ async def async_setup_entry(
         )
         return
 
-    device_name = await _resolve_selected_device_name(hass, entry)
+    names = await async_resolve_helper_device_names(hass, entry)
+    device_name = names.name
     if not device_name:
         _LOGGER.warning(
             "Skipping time entity setup for entry %s: selected device unavailable",
             entry.entry_id[:8],
         )
         return
+
+    if names.previous:
+        try:
+            cleanup_previous_helper_entities(
+                hass, names.previous, entry.entry_id, domain="time"
+            )
+        except Exception:  # noqa: BLE001 — defensive: cleanup is best-effort
+            pass
 
     features = await _load_device_features(hass, entry)
     has_battery = features.get("battery_storage", True)
@@ -115,52 +129,6 @@ async def async_setup_entry(
 def _is_legacy_yaml_import_entry(entry: ConfigEntry) -> bool:
     """Return True for the old YAML import entry that must not emit runtime entities."""
     return (entry.unique_id or "") == f"{DOMAIN}_yaml_import"
-
-
-def _normalize_device_name(device_name: str | None) -> str | None:
-    """Normalize a selected device name to the entity-id prefix form."""
-    if not device_name:
-        return None
-    normalized = device_name.strip().lower().replace("-", "_").replace(" ", "_")
-    return normalized or None
-
-
-async def _resolve_selected_device_name(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-) -> str | None:
-    """Resolve the selected device slug for entity-id construction."""
-    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-
-    selected = _normalize_device_name(entry_data.get("selected_device"))
-    if selected:
-        return selected
-
-    input_reader = entry_data.get("input_reader")
-    if input_reader is not None:
-        try:
-            stored = await input_reader.get_selected_device_from_storage(entry.entry_id)
-        except Exception:  # noqa: BLE001 — defensive: storage read is best-effort
-            stored = None
-        selected = _normalize_device_name(stored)
-        if selected:
-            return selected
-
-    selected = _normalize_device_name(entry.options.get(CONF_SELECTED_DEVICE))
-    if selected:
-        return selected
-
-    metadata_store = entry_data.get("metadata_store")
-    ha_device_id = entry.options.get("ha_device_id") or entry.data.get("ha_device_id")
-    if metadata_store is not None and ha_device_id:
-        try:
-            for metadata in await metadata_store.get_all():
-                if metadata.ha_device_id == ha_device_id:
-                    return _normalize_device_name(metadata.ensure_slug())
-        except Exception:  # noqa: BLE001 — defensive: store read is best-effort
-            return None
-
-    return None
 
 
 async def _load_device_features(
